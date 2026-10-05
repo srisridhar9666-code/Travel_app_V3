@@ -51,17 +51,18 @@
 </header>
 
 <h1>Scope of Work (SOW): Field Logistics &amp; Travel Management System</h1>
-<p class="subtitle">Sriyatra - Your Travel Desk &middot; Version 2.0, updated to match the application as delivered</p>
+<p class="subtitle">Sriyatra - Your Travel Desk &middot; Version 2.1, updated to match the application as delivered</p>
 
 <div class="meta">
-  <div><b>Version</b>2.0</div>
+  <div><b>Version</b>2.1</div>
   <div><b>Date</b>October 2026</div>
   <div><b>Supersedes</b>SOW v1 and the SOW Addendum</div>
   <div><b>Prepared by</b>Sridhar, DesignBoxed</div>
 </div>
 
 <p>This version keeps the seven areas of the original SOW and adds what was agreed and built since: a team hierarchy with
-two-level approval, richer cab handling, approved cancellations, booking details, vendors and invoices, and notifications.
+two-level approval, richer cab handling, approved cancellations, booking in one step with the ticket emailed to the
+traveller, room sharing allotted by the admin, vendors and invoices, department reporting, and notifications.
 Items marked <span class="new">NEW</span> were not in v1; <span class="changed">CHANGED</span> marks a v1 item whose
 behaviour was refined. A summary of differences is in section 12.</p>
 
@@ -119,7 +120,8 @@ the account of someone above them. The former "system admin" role was folded int
 </ul>
 <h3>Room sharing (co-stay)</h3>
 <ul>
-  <li>For a hotel, colleagues of the same gender already staying in that city on those dates are offered as room-share options; the requester may share, ask for a separate room or a different hotel. Different genders are never offered a shared room. An admin confirms each share.</li>
+  <li>As soon as the requester picks the hotel's state and city, colleagues of the same gender staying in that city are listed with their dates, so the trip can be lined up. Once the dates are entered they choose in the form: <b>share a room with</b> a named colleague, <b>a room of my own</b>, or <b>let the admin decide</b>. Different genders are never offered a shared room. <span class="changed">CHANGED</span></li>
+  <li>On Approvals the admin sees, for each hotel traveller, who they asked to share with or which same-gender colleagues are staying in that city on overlapping nights, and can <b>allot the same room</b> (both stays are paired and both people are told) or give a room of their own. <span class="new">NEW</span></li>
 </ul>
 <h3>Cancelling and extending <span class="new">NEW</span></h3>
 <ul>
@@ -138,12 +140,13 @@ the account of someone above them. The former "system admin" role was folded int
 
 <h2>5. Fulfilment &amp; Booking (Admins)</h2>
 <ul>
-  <li><b>Action queue:</b> tabs for Awaiting, Partly approved, Approved, Booked, Expired, Rejected and Cancelled, with live counts; split by type (All, Flight&middot;Train&middot;Bus, Cab, Hotel); filters for priority, "waiting for a manager" and search; a banner for high-priority work; separate cards for asks to cancel and cab extensions; CSV export of any tab.</li>
+  <li><b>Action queue:</b> tabs for Awaiting, Partly approved, Approved, Booked, Rejected and Cancelled, with live counts (Expired appears only when a request passed its travel date undecided); split by type (All, Flight&middot;Train&middot;Bus, Cab, Hotel); filters for priority and "waiting for a manager"; search by <b>employee name</b>, employee code or email, campaign, request number or place <span class="changed">CHANGED</span>; a banner for high-priority work; separate cards for asks to cancel and cab extensions; CSV export of any tab.</li>
   <li><b>Per-person decisions:</b> approve or reject the whole group or individual travellers, one by one or in one action. Every decision needs a reason, which the traveller sees. Booking is a separate step after approval.</li>
   <li><b>Booking details</b> <span class="changed">CHANGED</span>: marking someone booked records the booking reference (PNR) and what the traveller needs on the day: airline or operator, flight/train/bus number, departure and arrival, seat or berth, or the hotel's name and address, plus notes. For cabs: the cab actually sent (Dzire or Ertiga), vehicle number, driver's name and mobile.</li>
-  <li><b>AI ticket reading:</b> an admin uploads the ticket or voucher (PDF or image); Google Gemini (Vertex AI) reads the PNR, carrier, number, times, hotel and passenger name. The admin reviews and confirms before anything is booked; the extracted details also fill in the booking form automatically. Extraction never books or notifies on its own.</li>
+  <li><b>Booking in one step</b> <span class="changed">CHANGED</span>: <b>Mark booked</b> opens a booking section in the traveller's own row (no pop-up). The admin uploads the ticket or voucher there (PDF or image); Google Gemini (Vertex AI) reads the PNR, carrier, number, times and hotel and fills the booking details in automatically, and flags a ticket that does not match the request (wrong date, route or city). The admin checks the details and marks the traveller booked; the ticket is confirmed with the booking. Extraction never books or notifies on its own.</li>
   <li><b>Costs:</b> recorded per traveller in INR (a shared booking can be split evenly), together with the vendor paid. A worklist shows booked trips that still have no cost.</li>
-  <li><b>Notifications:</b> the traveller is told of every decision in the app and by email, the booking email carries all the booking details, and uploaded tickets are kept with the trip for admins.</li>
+  <li><b>Notifications:</b> the traveller is told of every decision in the app and by email; the booking email carries all the booking details <b>with the ticket attached</b> (manager in CC). <span class="changed">CHANGED</span></li>
+  <li><b>Tickets afterwards:</b> the traveller (or whoever raised the trip) downloads the confirmed ticket from My requests at any time; admins reopen it with <b>View ticket</b> on the Booked tab, and every ticket uploaded for a trip stays listed with it. <span class="new">NEW</span></li>
 </ul>
 
 <h2>6. Vendors &amp; Invoices <span class="new">NEW</span></h2>
@@ -167,15 +170,16 @@ the account of someone above them. The former "system admin" role was folded int
 
 <h2>8. Dashboard &amp; Reporting</h2>
 <ul>
-  <li><b>Live operations dashboard:</b> staff currently deployed by state and campaign, the queue waiting for decisions, recent and upcoming trips, and alerts (for example when email is not set up), with filters for dates, campaign, person and destination.</li>
-  <li><b>Cost analytics:</b> spend by campaign, location and period, split by travel, cab and hotel, with the uncosted worklist.</li>
-  <li><b>Travel logs:</b> every movement, searchable and exportable to CSV.</li>
+  <li><b>Live operations dashboard:</b> staff currently deployed by state and campaign, the queue waiting for decisions, recent and upcoming trips, and alerts (for example when email is not set up), with filters for dates, campaign, <b>department</b>, person and destination.</li>
+  <li><b>By department</b> <span class="new">NEW</span>: trips, people, hotel nights, pending decisions and booked spend for every department (people with none grouped as "No department"); clicking a department filters the whole dashboard, and choosing one narrows the employee list to its people.</li>
+  <li><b>Cost analytics:</b> spend by campaign, location and period, split by travel, cab and hotel, with the uncosted worklist; the same department filter applies.</li>
+  <li><b>Travel logs:</b> every movement, filterable by department, searchable and exportable to CSV.</li>
 </ul>
 
 <h2>9. Notifications &amp; Reminders <span class="new">NEW</span></h2>
 <ul>
   <li>In-app notification bell for everyone, plus email through the company Gmail account (an app password, not the account password).</li>
-  <li>Who is told: travellers of every decision and booking (manager in CC); admins of new requests, manager recommendations, asks to cancel, cab extensions and team changes; managers of their team's requests; the super admin of invoices to approve.</li>
+  <li>Who is told: travellers of every decision and booking (manager in CC; the booking email carries the ticket as an attachment); colleagues paired in a shared room; admins of new requests, manager recommendations, asks to cancel, cab extensions and team changes; managers of their team's requests; the super admin of invoices to approve.</li>
   <li>People can switch off optional categories (bookings, room sharing, reminders, new requests); decisions are always sent.</li>
   <li>Automatic reminders: travellers two days before a trip; admins about requests waiting more than three days; failed emails are retried.</li>
   <li>A delivery ledger shows who was told what and whether the email went, with a test-email button. While testing, an allow-list can restrict email to chosen addresses.</li>
@@ -184,6 +188,7 @@ the account of someone above them. The former "system admin" role was folded int
 <h2>10. System Security &amp; Audit Logging</h2>
 <ul>
   <li><b>Activity log:</b> every action by every user is recorded - who raised, edited, recommended, approved, rejected (including partial), booked, cancelled, uploaded or viewed an identity document, and every change to people, campaigns, vendors and invoices - with time, reason and before/after values.</li>
+  <li>Sign-ins, sign-outs and failed sign-ins are recorded too, for security, but are left out of the Activity log page, its counts and its CSV, so the page shows what people did. <span class="changed">CHANGED</span></li>
   <li><b>Tamper-evident:</b> each entry is chained to the previous one by a cryptographic hash, and the chain can be verified from the screen; in production the database account is made append-only so entries cannot be edited or deleted. The log is open to admins and the super admin and can be exported to CSV.</li>
   <li>Every server action checks the user's role and organisation; sign-in and password-reset attempts are rate-limited; secrets live in the server's environment file, never in the code.</li>
 </ul>
@@ -193,9 +198,9 @@ the account of someone above them. The former "system admin" role was folded int
 <ul>
   <li>Web application: React front end, Python FastAPI back end, MySQL 8 database.</li>
   <li>Works in current browsers on desktop, Android and iPhone/iPad.</li>
-  <li>Packaged with Docker (API and web server); ready for Google Cloud Run with Cloud Storage for uploaded files.</li>
+  <li>Packaged with Docker (API and web server), configured from one settings file (<i>backend/.env</i>); ready for Google Cloud Run with Cloud Storage buckets for tickets and identity documents.</li>
   <li>Database changes ship as migrations that can safely be re-run after an interruption; the app warns admins if the database or server is out of date.</li>
-  <li>Quality: about 980 automated tests plus a 127-check end-to-end run that builds the system from an empty database.</li>
+  <li>Quality: over 1,000 automated tests plus a 127-check end-to-end run that builds the system from an empty database.</li>
   <li>Built ready for more than one company (organisation) without database changes.</li>
 </ul>
 </div>
@@ -214,8 +219,10 @@ the account of someone above them. The former "system admin" role was folded int
   <tr><td>Hierarchy</td><td>Designations for future routing</td><td>Reports-to manager; My team; team changes approved by an admin</td></tr>
   <tr><td>Cabs</td><td>Local cab request</td><td>Cab type, local/outstation with distance, cab and driver recorded, extend by a day</td></tr>
   <tr><td>Cancellation</td><td>Not covered</td><td>Immediate before a decision; afterwards an ask approved by an admin or the manager</td></tr>
-  <tr><td>Booking</td><td>Status set to Booked on upload</td><td>Approve, then book with reference and full details; AI extraction prefills, a person confirms</td></tr>
+  <tr><td>Booking</td><td>Status set to Booked on upload</td><td>Approve, then book in one step in the traveller's row: upload the ticket, AI fills the details, a person checks; the ticket is emailed to the traveller and downloadable from My requests</td></tr>
+  <tr><td>Room sharing</td><td>Not covered</td><td>Same-gender colleagues in the chosen city suggested in the form; the requester chooses; the admin allots the same room</td></tr>
   <tr><td>Finance</td><td>Campaign cost reports</td><td>Per-traveller costs with vendor; vendor invoices approved by the super admin</td></tr>
+  <tr><td>Reporting</td><td>Live dashboard and cost reports</td><td>Adds a department filter and a By department breakdown across the dashboard, cost analytics and travel logs</td></tr>
   <tr><td>Campaigns</td><td>Admin CRUD</td><td>Auto IDs (CMP-YYYY-NNNN), statuses, managers create and edit, departments screen</td></tr>
   <tr><td>Employees</td><td>Directory and ID proofs</td><td>Status lifecycle, CSV import, unique 10-digit mobiles, encrypted ID numbers with 90-day purge</td></tr>
   <tr><td>Notifications</td><td>Email on booking</td><td>In-app and email for every event, reminders, delivery ledger, opt-outs</td></tr>
@@ -226,7 +233,7 @@ the account of someone above them. The former "system admin" role was folded int
 
 <footer class="sign">
   Sriyatra - Your Travel Desk &middot; A product of DesignBoxed Innovations Pvt. Ltd. &middot; Created by Sridhar.
-  This document describes the application on branch <i>claude/system-admin-bugs-cleanup-uafi8j</i> as of October 2026.
+  This document describes the application as of October 2026 (application version 0.16).
 </footer>
 </body>
 </html>
