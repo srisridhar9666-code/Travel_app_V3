@@ -471,6 +471,10 @@ export interface RequestTraveller {
   ticket_id?: number | null;
   /** The traveller's confirmed ticket can be downloaded from My requests. */
   ticket_ready?: boolean;
+  /** Every file on this person's booking - a booking can carry several. An
+   *  admin also sees files still under review; the traveller and whoever
+   *  raised the trip see the confirmed ones, which they can download. */
+  ticket_files?: TicketFile[];
   /** Admins only, on a hotel stay: colleagues of the same gender staying in the
    *  same city on overlapping nights - who could be put in one room. */
   room_matches?: CoStayMatch[];
@@ -500,6 +504,14 @@ export interface RequestTraveller {
   invoice_id?: number | null;
   invoice_number?: string | null;
   invoice_status?: InvoiceStatus | null;
+}
+
+/** One file on a traveller's booking. */
+export interface TicketFile {
+  id: number;
+  file_name: string | null;
+  /** Sent with the booking, so the traveller can download it. */
+  confirmed: boolean;
 }
 
 export interface RequestConflict {
@@ -605,9 +617,17 @@ export interface TravelRequest {
   /** The reader may approve or reject the pending ask. */
   can_decide_cancellation: boolean;
   cancelled_by_name: string | null;
-  /** Whether the person reading may ask for one more day now - the server's
+  /** The trip this one carries on, when it is an extension - a cab kept
+   *  longer, a stay made longer. */
+  extends_request_id: number | null;
+  /** How that trip was booked (the car and driver, or the hotel), so this one
+   *  can be booked the same way. */
+  previous_booking: string | null;
+  /** The live extension carrying this trip on, if any. */
+  extended_by_request_id: number | null;
+  /** Whether the person reading may extend this trip now - the server's
    *  rule, so the button only shows when the ask would be accepted. */
-  can_extend_cab: boolean;
+  can_extend: boolean;
 
   /** Why the trip is happening. Mandatory on anything raised from now on;
    *  null on requests that predate the field. */
@@ -720,6 +740,9 @@ export interface QueueCounts {
   cab_extensions: number;
   /** Decided trips whose requester asked to cancel, waiting on an answer. */
   cancellations: number;
+  /** Extensions - a cab kept longer, a stay made longer - still waiting on an
+   *  admin. The extra day is usually tomorrow. */
+  extensions: number;
 }
 
 /** Every request in one admin queue tab, read as the admin (so with cost), for
@@ -805,6 +828,10 @@ export interface Ticket {
   hotel_name: string | null;
   check_in: string | null;
   check_out: string | null;
+  /** The fare printed on the document - a proposal, like every extracted
+   *  value. Pre-fills the cost when booking. */
+  fare_amount: string | null;
+  fare_currency: string | null;
 
   confidence: Record<string, number> | null;
   /** Fields the model was unsure of — read these before confirming. */
@@ -1399,6 +1426,10 @@ export interface InvoiceSummary {
   created_at: string;
   submitted_at: string | null;
   decided_at: string | null;
+  /** The day an approved invoice was paid; null while it is still to be paid. */
+  paid_on: string | null;
+  /** The bank's reference for the payment - UTR, cheque number. */
+  payment_reference: string | null;
 }
 
 export interface InvoiceLine {
@@ -1438,6 +1469,8 @@ export interface Invoice extends InvoiceSummary {
   submitted_by_name: string | null;
   decided_by_name: string | null;
   decision_comment: string | null;
+  paid_by_name: string | null;
+  paid_at: string | null;
   lines: InvoiceLine[];
   history: InvoiceEvent[];
   /** What the viewer may do now - the same rules the server enforces. */
@@ -1445,14 +1478,21 @@ export interface Invoice extends InvoiceSummary {
   can_submit: boolean;
   can_delete: boolean;
   can_decide: boolean;
+  /** A super admin, on an approved invoice: mark it paid, or correct it. */
+  can_record_payment: boolean;
 }
 
 export interface InvoiceList {
   items: InvoiceSummary[];
   /** Per status, whatever the status filter: the tabs' counts. */
   counts: Record<InvoiceStatus, number>;
+  /** Approved invoices, split by whether they are paid yet. */
+  payment_counts: { paid: number; unpaid: number };
   total: number;
 }
+
+/** Paid or still to be paid: only an approved invoice has a payment state. */
+export type PaymentFilter = 'paid' | 'unpaid';
 
 /** A booked trip an invoice could carry. */
 export interface EligibleRow {

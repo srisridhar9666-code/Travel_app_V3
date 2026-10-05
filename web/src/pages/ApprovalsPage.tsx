@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   BedDouble,
   CalendarClock,
+  CalendarPlus,
   Car,
   CheckSquare,
   ChevronDown,
@@ -10,40 +11,28 @@ import {
   ChevronRight,
   Download,
   Eye,
-  FileText,
   Flag,
   History,
   IndianRupee,
   Plane,
   Ticket,
   Gavel,
-  Upload,
   UserCheck,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 
+import { BookingModal } from '@/components/BookingModal';
 import {
   CabBookingFields,
   CabExtensionNote,
   CabSent,
   cabDraftChanged,
   cabDraftComplete,
-  cabDraftEmpty,
   cabDraftFrom,
   type CabDraft,
 } from '@/components/CabDetails';
 import { ManagerReview } from '@/components/ManagerReview';
-import {
-  BookingFields,
-  EMPTY_BOOKING,
-  bookingBody,
-  bookingDraftValid,
-  draftOfTicket,
-  ticketToBookWith,
-  withTicket,
-  type BookingDraft,
-} from '@/components/BookingDetails';
 import { CancellationAsks } from '@/components/CancellationAsks';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
@@ -74,9 +63,7 @@ import {
   fetchRevisions,
   fetchTicketFile,
   recordCabBooking,
-  uploadTicket,
   type CabBookingBody,
-  fetchTickets,
 } from '@/lib/api';
 import { downloadCsv, slug, type CsvCell } from '@/lib/csv';
 import { openFileTab, showFile } from '@/lib/files';
@@ -107,7 +94,6 @@ import {
   type RequestStatus,
   type RequestTraveller,
   type ReviewFilter,
-  type Ticket as UploadedTicket,
   type TravelRequest,
   type TravellerStatus,
 } from '@/types';
@@ -244,6 +230,8 @@ const COMMON_COLUMNS: ExportColumn[] = [
   { header: 'Driver', value: (r) => r.cab_driver_name },
   { header: 'Driver phone', value: (r) => r.cab_driver_phone },
   { header: 'Days extended', value: (r) => (isCab(r) ? r.cab_extended_days : '') },
+  { header: 'Extends request #', value: (r) => r.extends_request_id },
+  { header: 'Booked before as', value: (r) => r.previous_booking },
   { header: 'Reason for travel', value: (r) => r.travel_reason },
   { header: 'Notes', value: (r) => r.notes },
   { header: 'Traveller', value: (_, t) => t.full_name },
@@ -486,9 +474,6 @@ function RevisionHistory({ requestId }: { requestId: number }) {
 const riding = (traveller: RequestTraveller) =>
   traveller.status === 'APPROVED' || traveller.status === 'BOOKED';
 
-/** "ts 09  ea 1234" as the server stores a plate: "TS 09 EA 1234". */
-const tidyPlate = (plate: string) => plate.trim().replace(/\s+/g, ' ').toUpperCase();
-
 function cabBody(draft: CabDraft, notify: boolean): CabBookingBody {
   return {
     booked_cab_type: draft.booked_cab_type as CabType,
@@ -508,17 +493,6 @@ interface PendingDecision {
   needsOverride: boolean;
 }
 
-/** Saved booking details back into the form's strings. */
-function draftOf(details: NonNullable<RequestTraveller['booking_details']>): Partial<BookingDraft> {
-  const out: Partial<BookingDraft> = {};
-  for (const [key, value] of Object.entries(details)) {
-    if (!value) continue;
-    out[key as keyof BookingDraft] =
-      key === 'depart_at' || key === 'arrive_at' ? String(value).slice(0, 16) : String(value);
-  }
-  return out;
-}
-
 export default function ApprovalsPage() {
   const queryClient = useQueryClient();
 
@@ -535,18 +509,13 @@ export default function ApprovalsPage() {
   const [pending, setPending] = useState<PendingDecision | null>(null);
   const [reason, setReason] = useState('');
   const [notify, setNotify] = useState(true);
-  const [reference, setReference] = useState('');
-  // Flight, train, bus or hotel details for the traveller, pre-filled from
-  // the uploaded ticket when there is one.
-  const [booking, setBooking] = useState<BookingDraft>(EMPTY_BOOKING);
-  const [bookingFromTicket, setBookingFromTicket] = useState(false);
-  // The ticket this booking is made from: uploaded in the booking window, or
-  // already uploaded for the traveller. Sent with the booking, it is confirmed
-  // and attached to their email.
-  const [bookingTicket, setBookingTicket] = useState<UploadedTicket | null>(null);
-  const ticketInput = useRef<HTMLInputElement>(null);
-  const bookingSection = useRef<HTMLDivElement>(null);
-  // The car sent, typed in the booking dialog for a cab or in Cab details.
+  // "Mark booked" opens the booking window for this traveller.
+  const [booking, setBooking] = useState<{ request: TravelRequest; traveller: RequestTraveller } | null>(
+    null,
+  );
+  // Only extensions - a cab kept longer, a stay made longer - on the waiting tabs.
+  const [extensionsOnly, setExtensionsOnlyState] = useState(false);
+  // The car sent, typed in Cab details.
   const [cabDraft, setCabDraft] = useState<CabDraft | null>(null);
   const [cabEditing, setCabEditing] = useState<TravelRequest | null>(null);
   // The cab operator paid, picked in Cab details. Null until the admin picks:
@@ -575,6 +544,10 @@ export default function ApprovalsPage() {
     if (next !== 'SUBMITTED' && next !== 'PARTIALLY_APPROVED') setReviewState('');
     setPage(1);
   };
+  const setExtensionsOnly = (next: boolean) => {
+    setExtensionsOnlyState(next);
+    setPage(1);
+  };
   const setReview = (next: ReviewFilter | '') => {
     setReviewState(next);
     setPage(1);
@@ -599,28 +572,35 @@ export default function ApprovalsPage() {
     search: search.trim() || undefined,
     priority: priority || undefined,
     review: review || undefined,
+    extensions_only: extensionsOnly || undefined,
   };
 
   // The banners count the whole queue. The tab labels follow the search and
   // priority, as the list under them does: "Booked 12" over a high-priority
   // list of two read as the filter not working.
   const counts = useQuery({ queryKey: ['queue-counts'], queryFn: () => fetchQueueCounts() });
-  const sliced = Boolean(filters.type || filters.search || filters.priority || filters.review);
+  const sliced = Boolean(
+    filters.type || filters.search || filters.priority || filters.review || filters.extensions_only,
+  );
   const slicedCounts = useQuery({
-    queryKey: ['queue-counts', filters.type, filters.search, filters.priority, filters.review],
+    queryKey: [
+      'queue-counts', filters.type, filters.search, filters.priority, filters.review,
+      filters.extensions_only,
+    ],
     queryFn: () =>
       fetchQueueCounts({
         type: filters.type,
         search: filters.search,
         priority: filters.priority,
         review: filters.review,
+        extensions_only: filters.extensions_only,
       }),
     enabled: sliced,
     placeholderData: keepPreviousData,
   });
   const tabCounts = sliced ? slicedCounts.data : counts.data;
   const requests = useQuery({
-    queryKey: ['queue', tab, kind, search, priority, review, page, pageSize],
+    queryKey: ['queue', tab, kind, search, priority, review, extensionsOnly, page, pageSize],
     queryFn: () =>
       fetchRequests({
         mine: false,
@@ -679,18 +659,12 @@ export default function ApprovalsPage() {
     // from state in the handlers: onError closes over the render that created
     // the mutation, so a decision fired straight from a button would otherwise
     // see a stale `pending` and never open the override dialog.
-    mutationFn: async (vars: {
+    mutationFn: (vars: {
       request: TravelRequest;
       traveller: RequestTraveller;
       to: TravellerStatus;
       items: BatchDecisionItem[];
-      /** The car sent, typed while booking a cab: saved first, so the
-       *  booking notice can carry it. */
-      cab?: CabBookingBody;
-    }) => {
-      if (vars.cab) await recordCabBooking(vars.request.id, vars.cab);
-      return decideBatch(vars.request.id, vars.items);
-    },
+    }) => decideBatch(vars.request.id, vars.items),
     // This flow has its own error handling below (it can turn a refusal into
     // the override dialog), so the global toast stays out of it.
     meta: { errorToast: false },
@@ -702,8 +676,6 @@ export default function ApprovalsPage() {
       refresh();
     },
     onError: (err, vars) => {
-      // The car may have been saved before the booking was refused.
-      if (vars.cab) refresh();
       const message = errorMessage(err);
       // The server recomputes conflicts at decision time, so an approval that
       // looked clear on screen can still come back needing a reason. Ask for
@@ -722,8 +694,6 @@ export default function ApprovalsPage() {
   function close() {
     setPending(null);
     setReason('');
-    setReference('');
-    setCabDraft(null);
   }
 
   // Cabs whose travellers asked for one more day. They sit on whichever tab
@@ -772,64 +742,19 @@ export default function ApprovalsPage() {
     setExtension({ request, approve });
   };
 
-  /** Start a decision. Everything opens the dialog now: an approval needs a
-   *  typed reason just as a rejection does, because an approval with nothing
-   *  written against it is the one somebody asks about months later. */
+  /** Start a decision. Approve, reject and cancel open a small dialog - each
+   *  needs a typed reason, because an approval with nothing written against
+   *  it is the one somebody asks about months later. Booking opens the
+   *  booking window, which carries everything a booking needs. */
   const start = (request: TravelRequest, traveller: RequestTraveller, to: TravellerStatus) => {
-    // Booking is the travel desk's step, not a judgement call; a default note
-    // saves typing one for every ticket. It can still be changed.
-    setReason(to === 'BOOKED' ? 'Ticket booked' : '');
-    setReference('');
-    setNotify(true);
-    // Booking a cab is where the car is usually known, so it is asked for
-    // right there rather than on a second screen.
-    setCabDraft(to === 'BOOKED' && isCab(request) ? cabDraftFrom(request) : null);
-    setBooking(traveller.booking_details ? { ...EMPTY_BOOKING, ...draftOf(traveller.booking_details) } : EMPTY_BOOKING);
-    setBookingFromTicket(false);
-    setBookingTicket(null);
-    setPending({ request, traveller, to, needsOverride: false });
-    if (to === 'BOOKED' && !isCab(request)) {
-      // A ticket already uploaded for them: book with it, and start from what
-      // it says so the admin checks rather than types.
-      queryClient
-        .fetchQuery({ queryKey: ['tickets', request.id], queryFn: () => fetchTickets(request.id) })
-        .then((tickets) => {
-          const ticket = ticketToBookWith(tickets, traveller.id);
-          if (!ticket) return;
-          setBookingTicket(ticket);
-          const found = draftOfTicket(ticket);
-          if (!found.reference && !bookingBody(found.draft)) return;
-          setBooking((current) => (bookingBody(current) ? current : found.draft));
-          setReference((current) => current || found.reference);
-          setBookingFromTicket(true);
-        })
-        .catch(() => undefined);
+    if (to === 'BOOKED') {
+      setBooking({ request, traveller });
+      return;
     }
+    setReason('');
+    setNotify(true);
+    setPending({ request, traveller, to, needsOverride: false });
   };
-
-  // Uploading inside the booking window: the ticket is read while the admin
-  // waits (a few seconds), and what it says fills the fields below it.
-  const attachTicket = useMutation({
-    mutationFn: (vars: { requestId: number; travellerId: number; file: File }) =>
-      uploadTicket(vars.requestId, vars.travellerId, vars.file),
-    onSuccess: (ticket) => {
-      setBookingTicket(ticket);
-      queryClient.invalidateQueries({ queryKey: ['tickets', ticket.request_id] });
-      const found = draftOfTicket(ticket);
-      const read = Boolean(found.reference || bookingBody(found.draft));
-      if (read) {
-        setBooking((current) => withTicket(current, found.draft));
-        if (found.reference) setReference(found.reference);
-        setBookingFromTicket(true);
-      }
-      if (ticket.status === 'FAILED' || !read) {
-        toast.error('Uploaded, but the ticket could not be read - type the details below.');
-      } else {
-        toast.success('Ticket read - check the details below.');
-      }
-    },
-    meta: { errorFallback: 'Could not upload the ticket.' },
-  });
 
   const confirm = () => {
     if (!pending) return;
@@ -839,34 +764,14 @@ export default function ApprovalsPage() {
       reason,
       notify_employee: notify,
     };
-    const carReady = cabDraft !== null && cabDraftComplete(cabDraft);
-    if (pending.to === 'BOOKED') {
-      // A cab's vehicle number is a fair booking reference when the vendor
-      // gave no other.
-      item.booking_reference =
-        reference.trim() || (carReady ? tidyPlate(cabDraft!.vehicle_number) : reference);
-      if (!cabDraft) {
-        item.booking_details = bookingBody(booking);
-        if (bookingTicket) item.ticket_id = bookingTicket.id;
-      }
-    }
     // An override is recorded separately from the decision it justifies, so it
     // carries the same sentence rather than replacing it.
     if (pending.needsOverride) item.conflict_override_reason = reason;
-    // The booking notice carries the car, so it is not sent separately - unless
-    // someone else is already riding and must hear about the car too.
-    const othersRiding = pending.request.travellers.some(
-      (t) => t.id !== pending.traveller.id && riding(t),
-    );
     decide.mutate({
       request: pending.request,
       traveller: pending.traveller,
       to: pending.to,
       items: [item],
-      cab:
-        carReady && cabDraftChanged(cabDraft!, pending.request)
-          ? cabBody(cabDraft!, othersRiding)
-          : undefined,
     });
   };
 
@@ -884,11 +789,6 @@ export default function ApprovalsPage() {
     if (requests.data && page > pages) setPage(pages);
   }, [requests.data, page, pages]);
 
-  // A half-typed car would be lost on save; all of it or none of it.
-  const cabHalfTyped =
-    cabDraft !== null && !cabDraftEmpty(cabDraft) && !cabDraftComplete(cabDraft);
-  const referenceReady =
-    reference.trim().length >= 2 || (cabDraft !== null && cabDraftComplete(cabDraft));
   const pendingExtensions = extensions.data?.items ?? [];
   const showExtensions = (kind === '' || kind === 'LOCAL_CAB') && pendingExtensions.length > 0;
 
@@ -896,25 +796,11 @@ export default function ApprovalsPage() {
     ? ''
     : pending.needsOverride
       ? `Approve ${pending.traveller.full_name} over a clash`
-      : pending.to === 'BOOKED'
-        ? `Book ${pending.traveller.full_name}`
-        : pending.to === 'APPROVED'
-          ? `Approve ${pending.traveller.full_name}`
-          : `${pending.to === 'REJECTED' ? 'Reject' : 'Cancel'} ${pending.traveller.full_name}`;
+      : pending.to === 'APPROVED'
+        ? `Approve ${pending.traveller.full_name}`
+        : `${pending.to === 'REJECTED' ? 'Reject' : 'Cancel'} ${pending.traveller.full_name}`;
 
-  // A booking in progress opens in the traveller's own row, not a dialog, and
-  // is brought into view - on a phone the row can be below the fold.
-  const bookingFor = pending?.to === 'BOOKED' ? pending.traveller.id : undefined;
-  useEffect(() => {
-    if (bookingFor === undefined) return;
-    const frame = requestAnimationFrame(() =>
-      bookingSection.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }),
-    );
-    return () => cancelAnimationFrame(frame);
-  }, [bookingFor]);
-
-  // The fields of a decision and its buttons, shared by the dialog (approve,
-  // reject, cancel) and the booking section that opens in a traveller's row.
+  // The fields of a decision (approve, reject, cancel) and its buttons.
   const decisionFields = (
     <>
       {pending?.needsOverride && (
@@ -932,7 +818,6 @@ export default function ApprovalsPage() {
         {/* The admin decides with the manager's view in front of them - or
             knowing it has not come yet, which never stops them deciding. */}
         {pending &&
-        pending.to !== 'BOOKED' &&
         (pending.traveller.manager_recommendation || pending.traveller.manager_name) && (
           <div className="space-y-1.5">
             <p className="text-xs font-medium">Manager’s recommendation</p>
@@ -945,164 +830,9 @@ export default function ApprovalsPage() {
           </div>
         )}
 
-        {pending?.to === 'BOOKED' && cabDraft && (
-          <div className="space-y-2 rounded-md border border-border px-3 py-3">
-            <p className="text-xs font-medium">The car sent</p>
-            <CabBookingFields
-              draft={cabDraft}
-              onChange={setCabDraft}
-              idPrefix="book-cab"
-              asked={cabAsked(pending.request)}
-            />
-            <p className={cn('text-2xs', cabHalfTyped ? 'text-danger' : 'text-text-subtle')}>
-              {cabHalfTyped
-                ? 'Fill in all four, or clear them and add the car later from Cab details.'
-                : 'Optional now - you can add or change it later from Cab details. The traveller’s booking notice includes it.'}
-            </p>
-          </div>
-        )}
-
-        {pending?.to === 'BOOKED' && !cabDraft && (
-          <div className="rounded-md border border-dashed border-border-strong bg-surface-sunken/50 px-3 py-3">
-            <input
-              ref={ticketInput}
-              type="file"
-              accept="image/jpeg,image/png,image/webp,image/heic,application/pdf"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file && pending) {
-                  attachTicket.mutate({
-                    requestId: pending.request.id,
-                    travellerId: pending.traveller.id,
-                    file,
-                  });
-                }
-                e.target.value = '';
-              }}
-            />
-            {bookingTicket ? (
-              <>
-                <div className="flex flex-wrap items-center gap-2">
-                  <FileText size={15} className="shrink-0 text-text-subtle" />
-                  <span className="min-w-0 truncate text-xs font-medium">
-                    {bookingTicket.file_name ?? 'Ticket'}
-                  </span>
-                  <Badge tone={bookingTicket.status === 'FAILED' ? 'warning' : 'success'}>
-                    {bookingTicket.status === 'FAILED' ? 'Could not read' : 'Read'}
-                  </Badge>
-                  <span className="ml-auto flex gap-1">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      loading={viewTicket.isPending}
-                      onClick={() =>
-                        viewTicket.mutate({ ticketId: bookingTicket.id, tab: openFileTab() })
-                      }
-                    >
-                      <Eye size={13} />
-                      View
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      loading={attachTicket.isPending}
-                      onClick={() => ticketInput.current?.click()}
-                    >
-                      <Upload size={13} />
-                      Replace
-                    </Button>
-                  </span>
-                </div>
-                <p className="mt-1.5 text-2xs text-text-subtle">
-                  {bookingTicket.status === 'FAILED'
-                    ? 'This ticket could not be read - type the details below. It is still attached to the email.'
-                    : 'The details below are filled from this ticket - check them. It is attached to the email.'}
-                </p>
-                {bookingTicket.mismatches.length > 0 && (
-                  <div className="mt-2 rounded-md border border-warning/40 bg-warning-soft px-2.5 py-2">
-                    <p className="flex items-center gap-1.5 text-2xs font-semibold text-warning">
-                      <AlertTriangle size={12} />
-                      This ticket does not match the request
-                    </p>
-                    <ul className="mt-0.5 space-y-0.5">
-                      {bookingTicket.mismatches.map((note) => (
-                        <li key={note} className="text-2xs leading-relaxed text-text-muted">
-                          {note}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="flex flex-wrap items-center gap-3">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  loading={attachTicket.isPending}
-                  onClick={() => ticketInput.current?.click()}
-                >
-                  <Upload size={13} />
-                  Upload ticket
-                </Button>
-                <p className="min-w-0 flex-1 text-2xs text-text-subtle">
-                  {attachTicket.isPending
-                    ? 'Reading the ticket - this can take up to 20 seconds…'
-                    : 'PDF or photo. The details below fill in from it, and it is attached to the traveller’s email.'}
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {pending?.to === 'BOOKED' && (
-          <Field
-            label={cabDraft ? 'Booking reference' : 'Ticket or booking reference'}
-            htmlFor="reference"
-            required={!cabDraft}
-            hint={
-              cabDraft
-                ? 'The vendor’s booking ID. Leave blank to use the vehicle number.'
-                : 'PNR, ticket number or hotel confirmation.'
-            }
-          >
-            <Input
-              id="reference"
-              value={reference}
-              onChange={(e) => setReference(e.target.value)}
-              placeholder={cabDraft ? 'VND-20431' : '6E-4412 / PNR QK8T2M'}
-            />
-          </Field>
-        )}
-
-        {pending?.to === 'BOOKED' && !cabDraft && (
-          <div className="space-y-2 rounded-md border border-border px-3 py-3">
-            <p className="text-xs font-medium">
-              {pending.request.request_type === 'HOTEL' ? 'The stay' : 'The journey'}
-              <span className="ml-1 font-normal text-text-subtle">
-                {bookingFromTicket
-                  ? '- filled from the uploaded ticket; check it before saving'
-                  : '- what the traveller needs on the day (optional)'}
-              </span>
-            </p>
-            <BookingFields
-              draft={booking}
-              onChange={setBooking}
-              hotel={pending.request.request_type === 'HOTEL'}
-            />
-          </div>
-        )}
-
         {/* Required on every decision now, approvals included. */}
         <Field
-          label={
-            pending?.needsOverride
-              ? 'Why approve anyway?'
-              : pending?.to === 'BOOKED'
-                ? 'Note to the traveller'
-                : 'Reason'
-          }
+          label={pending?.needsOverride ? 'Why approve anyway?' : 'Reason'}
           htmlFor="decision-reason"
           required
           hint="Shown to the traveller and kept in the activity log."
@@ -1114,11 +844,9 @@ export default function ApprovalsPage() {
             placeholder={
               pending?.needsOverride
                 ? 'The earlier booking was released'
-                : pending?.to === 'BOOKED'
-                  ? 'Flight confirmed with the travel desk'
-                  : pending?.to === 'APPROVED'
-                    ? 'Needed on site for the client walkthrough'
-                    : 'Covered by a colleague already in that city'
+                : pending?.to === 'APPROVED'
+                  ? 'Needed on site for the client walkthrough'
+                  : 'Covered by a colleague already in that city'
             }
           />
         </Field>
@@ -1137,13 +865,7 @@ export default function ApprovalsPage() {
             <span className="font-medium">Email {pending?.traveller.full_name}</span>
             <span className="block text-text-muted">
               {notify
-                ? `${
-                    pending?.to === 'BOOKED'
-                      ? bookingTicket
-                        ? 'They get an email with the booking details and the ticket attached.'
-                        : 'They get an email with the booking details.'
-                      : 'They get an email with this decision and the reason.'
-                  }${
+                ? `They get an email with this decision and the reason.${
                     pending?.traveller.manager_name
                       ? ` ${pending.traveller.manager_name} is copied on it.`
                       : ''
@@ -1164,22 +886,16 @@ export default function ApprovalsPage() {
       <Button
         variant={pending?.to === 'REJECTED' ? 'danger' : 'primary'}
         loading={decide.isPending}
-        disabled={
-          reason.trim().length < 3 ||
-          (pending?.to === 'BOOKED' &&
-            (!referenceReady || cabHalfTyped || (!cabDraft && !bookingDraftValid(booking))))
-        }
+        disabled={reason.trim().length < 3}
         onClick={confirm}
       >
         {pending?.needsOverride
           ? 'Approve anyway'
-          : pending?.to === 'BOOKED'
-            ? 'Mark booked'
-            : pending?.to === 'APPROVED'
-              ? 'Approve traveller'
-              : pending?.to === 'REJECTED'
-                ? 'Reject traveller'
-                : 'Cancel traveller'}
+          : pending?.to === 'APPROVED'
+            ? 'Approve traveller'
+            : pending?.to === 'REJECTED'
+              ? 'Reject traveller'
+              : 'Cancel traveller'}
       </Button>
     </>
   );
@@ -1194,8 +910,31 @@ export default function ApprovalsPage() {
         </p>
       </div>
 
-      {countData && (urgent > 0 || countData.expired > 0 || countData.with_conflicts > 0) && (
+      {countData &&
+        (urgent > 0 || countData.expired > 0 || countData.with_conflicts > 0 || countData.extensions > 0) && (
         <div className="flex flex-wrap gap-3">
+          {countData.extensions > 0 && (
+            <Card className="flex-1 border-brand/40 bg-brand-soft">
+              <button
+                type="button"
+                onClick={() => {
+                  // Straight to them, on the tab that holds them.
+                  if (tab !== 'SUBMITTED' && tab !== 'PARTIALLY_APPROVED') setTab('SUBMITTED');
+                  setSearch('');
+                  setExtensionsOnly(true);
+                }}
+                className="flex w-full items-center gap-2.5 px-4 py-3 text-left"
+                title="Show the extensions waiting for a decision"
+              >
+                <CalendarPlus size={15} className="shrink-0 text-brand-strong" />
+                <p className="text-xs text-text-muted">
+                  <span className="font-semibold text-brand-strong">{countData.extensions}</span>{' '}
+                  {countData.extensions === 1 ? 'trip asks' : 'trips ask'} to be extended - a cab kept
+                  longer or more nights, usually from tomorrow.
+                </p>
+              </button>
+            </Card>
+          )}
           {urgent > 0 && (
             <Card className="flex-1 border-danger/40 bg-danger-soft">
               <button
@@ -1430,6 +1169,24 @@ export default function ApprovalsPage() {
               <span className="tabular-nums">{onManager}</span>
             </button>
           )}
+          {(extensionsOnly || (waitingTab && (countData?.extensions ?? 0) > 0)) && (
+            <button
+              type="button"
+              aria-pressed={extensionsOnly}
+              onClick={() => setExtensionsOnly(!extensionsOnly)}
+              title="A cab kept longer or a stay made longer. Usually needed tomorrow."
+              className={cn(
+                'inline-flex h-10 items-center gap-1.5 rounded-md border px-3 text-sm transition-colors',
+                extensionsOnly
+                  ? 'border-brand bg-brand-soft font-medium text-brand-strong'
+                  : 'border-border bg-surface text-text-muted hover:bg-surface-sunken hover:text-text',
+              )}
+            >
+              <CalendarPlus size={15} />
+              Extensions
+              <span className="tabular-nums">{tabCounts?.extensions ?? countData?.extensions ?? 0}</span>
+            </button>
+          )}
         </div>
 
         {requests.isPending ? (
@@ -1451,7 +1208,9 @@ export default function ApprovalsPage() {
             description={
               review
                 ? 'Nothing in this tab is waiting for a manager.'
-                : search.trim() || priority
+                : extensionsOnly
+                  ? 'No extensions in this tab.'
+                  : search.trim() || priority
                   ? 'Nothing in this tab matches that search or priority.'
                   : tab === 'SUBMITTED'
                     ? 'No requests are waiting on a decision.'
@@ -1478,6 +1237,18 @@ export default function ApprovalsPage() {
                           {REQUEST_STATUS_LABELS[request.status]}
                         </Badge>
                         <PriorityBadge priority={request.priority} />
+                        {request.extends_request_id != null && (
+                          <Badge tone="brand">
+                            <CalendarPlus size={11} />
+                            Extends #{request.extends_request_id}
+                          </Badge>
+                        )}
+                        {request.extended_by_request_id != null && (
+                          <Badge tone="info">
+                            <CalendarPlus size={11} />
+                            Extended by #{request.extended_by_request_id}
+                          </Badge>
+                        )}
                         {request.edit_count > 0 && (
                           <button
                             type="button"
@@ -1502,6 +1273,15 @@ export default function ApprovalsPage() {
                         )}
                         {request.notes && ` · ${request.notes}`}
                       </p>
+                      {request.extends_request_id != null && (
+                        <p className="mt-1 text-xs text-text-muted">
+                          <span className="font-medium text-text">Why:</span> {request.travel_reason}
+                          {' · '}
+                          {request.previous_booking
+                            ? `Booked before as ${request.previous_booking}`
+                            : 'The trip it extends is not booked yet'}
+                        </p>
+                      )}
                     </div>
 
                     {isCab(request) && !request.is_cancelled && request.travellers.some(riding) && (
@@ -1586,20 +1366,19 @@ export default function ApprovalsPage() {
                         )}
 
                         <div className="ml-auto flex gap-1.5">
-                          {traveller.ticket_id != null && (
+                          {(traveller.ticket_files ?? []).map((file, index, all) => (
                             <Button
+                              key={file.id}
                               size="sm"
                               variant="ghost"
-                              loading={viewTicket.isPending && viewTicket.variables?.ticketId === traveller.ticket_id}
-                              onClick={() =>
-                                viewTicket.mutate({ ticketId: traveller.ticket_id!, tab: openFileTab() })
-                              }
-                              title={`Open the ticket uploaded for ${traveller.full_name}`}
+                              loading={viewTicket.isPending && viewTicket.variables?.ticketId === file.id}
+                              onClick={() => viewTicket.mutate({ ticketId: file.id, tab: openFileTab() })}
+                              title={`${file.file_name ?? 'File'}${file.confirmed ? '' : ' - not sent yet'}`}
                             >
                               <Eye size={13} />
-                              View ticket
+                              {all.length === 1 ? 'View ticket' : `File ${index + 1}`}
                             </Button>
-                          )}
+                          ))}
                           {traveller.status === 'PENDING' && (
                             <>
                               <Button
@@ -1618,7 +1397,7 @@ export default function ApprovalsPage() {
                               </Button>
                             </>
                           )}
-                          {traveller.status === 'APPROVED' && bookingFor !== traveller.id && (
+                          {traveller.status === 'APPROVED' && (
                             <Button
                               size="sm"
                               variant="secondary"
@@ -1630,29 +1409,6 @@ export default function ApprovalsPage() {
                           )}
                         </div>
 
-                        {/* Booking happens here, in the row - not in a popup. */}
-                        {bookingFor === traveller.id && (
-                          <div
-                            ref={bookingSection}
-                            className="order-last mt-1 basis-full scroll-mt-24 rounded-lg border border-border-strong bg-surface px-3 py-3 shadow-sm sm:px-4"
-                          >
-                            <div className="mb-3 border-b border-border pb-2.5">
-                              <p className="flex items-center gap-1.5 text-sm font-semibold">
-                                <Ticket size={15} />
-                                {dialogTitle}
-                              </p>
-                              <p className="mt-0.5 text-2xs text-text-subtle">
-                                {isCab(request)
-                                  ? 'The traveller is told once this is saved.'
-                                  : 'Upload the ticket - the details fill in from it. The traveller gets them by email with the ticket attached.'}
-                              </p>
-                            </div>
-                            {decisionFields}
-                            <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-border pt-3">
-                              {decisionActions}
-                            </div>
-                          </div>
-                        )}
                       </div>
                     ))}
                   </div>
@@ -1757,9 +1513,9 @@ export default function ApprovalsPage() {
       </Card>
 
       {/* Approve, reject and cancel are a sentence each, so a small dialog.
-          Booking is not: it opens in the traveller's own row (see above). */}
+          Booking carries a good deal more, so it has a window of its own. */}
       <Modal
-        open={pending !== null && pending.to !== 'BOOKED'}
+        open={pending !== null}
         onClose={close}
         title={dialogTitle}
         description={
@@ -1771,6 +1527,19 @@ export default function ApprovalsPage() {
       >
         {decisionFields}
       </Modal>
+
+      {booking && (
+        <BookingModal
+          key={`${booking.request.id}-${booking.traveller.id}`}
+          request={booking.request}
+          traveller={booking.traveller}
+          onClose={() => setBooking(null)}
+          onBooked={() => {
+            setBooking(null);
+            refresh();
+          }}
+        />
+      )}
 
       <Modal
         open={cabEditing !== null}

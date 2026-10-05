@@ -910,3 +910,101 @@ def test_money_is_written_the_indian_way():
     assert invoice_service.inr(Decimal("1234567.5")) == "INR 12,34,567.50"
     assert invoice_service.inr(Decimal("999")) == "INR 999.00"
     assert invoice_service.inr(Decimal("100000")) == "INR 1,00,000.00"
+
+
+# ---------------------------------------------------------------------------
+# Payment: approved is not paid
+# ---------------------------------------------------------------------------
+
+
+def pay(client, org, invoice_id, who="owner", **payload):
+    return client.post(f"/invoices/{invoice_id}/payment", headers=auth(org[who]),
+                       json={"paid": True, **payload})
+
+
+class TestPayment:
+    def test_approved_is_still_to_be_paid(self, client, db, org):
+        made = approved(client, org, [trip(db, org)])
+        assert made["status"] == "APPROVED" and made["paid_on"] is None
+        assert made["can_record_payment"] is True
+        assert client.get(f"/invoices/{made['id']}", headers=auth(org["admin"])).json()[
+            "can_record_payment"] is False
+
+    def test_approving_and_paying_in_one_step(self, client, db, org):
+        made = submitted(client, org, [trip(db, org)])
+        r = approve(client, org, made["id"], paid=True, paid_on=str(clock.local_today()),
+                    payment_reference="  UTR 4411  ")
+        assert r.status_code == 200, r.text
+        got = r.json()
+        assert got["status"] == "APPROVED"
+        assert got["paid_on"] == str(clock.local_today())
+        assert got["payment_reference"] == "UTR 4411"
+        assert got["paid_by_name"] == "Sridhar Rao"
+        assert [e.action for e in log(db, made["id"])][-2:] == ["APPROVE", "UPDATE"]
+        told = notices(db, "INVOICE_APPROVED", user=org["admin"])[-1]
+        assert "Paid on" in told.body
+
+    def test_a_future_payment_date_refuses_the_approval_too(self, client, db, org):
+        made = submitted(client, org, [trip(db, org)])
+        r = approve(client, org, made["id"], paid=True,
+                    paid_on=str(clock.local_today() + timedelta(days=1)))
+        assert r.status_code == 422
+        again = client.get(f"/invoices/{made['id']}", headers=auth(org["owner"])).json()
+        assert again["status"] == "SUBMITTED"
+
+    def test_marking_it_paid_later(self, client, db, org):
+        made = approved(client, org, [trip(db, org)])
+        r = pay(client, org, made["id"], payment_reference="UTR 9001")
+        assert r.status_code == 200, r.text
+        got = r.json()
+        assert got["paid_on"] == str(clock.local_today())
+        entry = log(db, made["id"], "UPDATE")[-1]
+        assert entry.summary.endswith(f"marked {made['number']} paid on "
+                                      f"{clock.local_today():%d %b %Y}, ref UTR 9001")
+        told = notices(db, "INVOICE_PAID", user=org["admin"])
+        assert len(told) == 1 and told[0].title == f"Invoice {made['number']} paid"
+        assert notices(db, "INVOICE_PAID", channel=NotificationChannel.EMAIL) == []
+
+    def test_taking_a_payment_back_needs_a_reason(self, client, db, org):
+        made = approved(client, org, [trip(db, org)])
+        pay(client, org, made["id"])
+        r = client.post(f"/invoices/{made['id']}/payment", headers=auth(org["owner"]),
+                        json={"paid": False})
+        assert r.status_code == 422
+        r = client.post(f"/invoices/{made['id']}/payment", headers=auth(org["owner"]),
+                        json={"paid": False, "comment": "Bank returned the transfer"})
+        assert r.status_code == 200, r.text
+        assert r.json()["paid_on"] is None and r.json()["payment_reference"] is None
+        assert log(db, made["id"], "UPDATE")[-1].reason == "Bank returned the transfer"
+
+    def test_only_an_approved_invoice_is_paid(self, client, db, org):
+        made = submitted(client, org, [trip(db, org)])
+        r = pay(client, org, made["id"])
+        assert r.status_code == 409 and "not approved" in r.json()["detail"]
+
+    @pytest.mark.parametrize("who", ["admin", "sysadmin", "lead"])
+    def test_only_a_super_admin_records_it(self, client, db, org, who):
+        made = approved(client, org, [trip(db, org)])
+        assert pay(client, org, made["id"], who=who).status_code == 403
+
+    def test_the_list_splits_paid_from_unpaid(self, client, db, org):
+        one = approved(client, org, [trip(db, org)])
+        approved(client, org, [trip(db, org, "sana")])
+        pay(client, org, one["id"])
+        listed = client.get("/invoices", headers=auth(org["admin"])).json()
+        assert listed["payment_counts"] == {"paid": 1, "unpaid": 1}
+        paid = client.get("/invoices?payment=paid", headers=auth(org["admin"])).json()
+        assert [i["id"] for i in paid["items"]] == [one["id"]]
+        unpaid = client.get("/invoices?payment=unpaid", headers=auth(org["admin"])).json()
+        assert one["id"] not in [i["id"] for i in unpaid["items"]]
+
+    def test_the_csv_says_whether_it_is_paid(self, client, db, org):
+        made = approved(client, org, [trip(db, org)])
+
+        def head():
+            text = client.get(f"/invoices/{made['id']}/export.csv",
+                              headers=auth(org["admin"])).content.decode("utf-8-sig")
+            return {row[0]: row[1] for row in csv.reader(io.StringIO(text)) if len(row) == 2}
+        assert head()["Payment"] == "Not paid yet"
+        pay(client, org, made["id"], payment_reference="UTR 77")
+        assert head()["Payment"] == f"Paid on {clock.local_today():%d %b %Y}, ref UTR 77"

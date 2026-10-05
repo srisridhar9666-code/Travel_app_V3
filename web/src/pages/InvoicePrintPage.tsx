@@ -171,6 +171,12 @@ function Sheet({ invoice }: { invoice: Invoice }) {
                 {formatInstant(invoice.decided_at)}
                 {invoice.decided_by_name && ` by ${invoice.decided_by_name}`}
               </dd>
+              <dt className="text-text-subtle">Payment</dt>
+              <dd>
+                {invoice.paid_on
+                  ? `Paid on ${dayLabel(invoice.paid_on)}${invoice.payment_reference ? `, ref ${invoice.payment_reference}` : ''}`
+                  : 'Not paid yet'}
+              </dd>
             </>
           )}
         </dl>

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BedDouble, Car, ClipboardCheck, Plane, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { BedDouble, CalendarPlus, Car, ClipboardCheck, Plane, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 
@@ -214,6 +214,12 @@ export default function TeamApprovalsPage() {
                           {REQUEST_STATUS_LABELS[request.status]}
                         </Badge>
                         <PriorityBadge priority={request.priority} />
+                        {request.extends_request_id != null && (
+                          <Badge tone="brand">
+                            <CalendarPlus size={11} />
+                            Extends request {request.extends_request_id}
+                          </Badge>
+                        )}
                       </div>
                       <p className="mt-1 text-xs text-text-muted">
                         {campaignLabel(request)} · raised by {request.requester_name}
@@ -233,6 +239,11 @@ export default function TeamApprovalsPage() {
                       )}
                       {request.notes && (
                         <p className="mt-0.5 text-xs text-text-muted">Notes: {request.notes}</p>
+                      )}
+                      {request.extends_request_id != null && request.previous_booking && (
+                        <p className="mt-0.5 text-xs text-text-muted">
+                          Booked before as {request.previous_booking}
+                        </p>
                       )}
                     </div>
                   </div>

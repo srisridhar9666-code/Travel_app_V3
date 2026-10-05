@@ -7,6 +7,7 @@ import type {
   AnalyticsBundle,
   AuditRow,
   BatchDecisionItem,
+  BookingDetails,
   ChainVerification,
   Colleague,
   CoStayMatch,
@@ -37,6 +38,7 @@ import type {
   OpenTrips,
   Paginated,
   PasswordChanged,
+  PaymentFilter,
   ProfileUpdate,
   Project,
   QueueCounts,
@@ -72,7 +74,7 @@ import type {
  * shell compares it with what /health reports, to tell an admin when the API
  * process is older than this page.
  */
-export const API_VERSION = '0.16.0';
+export const API_VERSION = '0.17.0';
 
 /** Negative when `a` is older than `b`, by dotted number. */
 export function compareVersions(a: string, b: string): number {
@@ -531,8 +533,10 @@ interface RequestQuery {
   sort?: 'newest' | 'priority';
   /** Two-level approval: still waiting on a manager, or already reviewed. */
   review?: ReviewFilter;
-  /** Cabs waiting on an admin's answer to "one more day". */
+  /** Cabs waiting on an admin's answer to the older "one more day" ask. */
   extension?: 'pending';
+  /** Only extensions: a cab kept longer, a stay made longer. */
+  extensions_only?: boolean;
   /** Decided trips whose requester asked to cancel, still waiting. */
   cancellation?: 'pending';
   page?: number;
@@ -648,6 +652,7 @@ export const fetchQueueCounts = (
     search?: string;
     priority?: RequestPriority;
     review?: ReviewFilter;
+    extensions_only?: boolean;
   } = {},
 ) =>
   api.get<QueueCounts>('/requests/queue/counts', { params: filters }).then((r) => r.data);
@@ -660,6 +665,7 @@ export const exportQueue = (params: {
   search?: string;
   priority?: RequestPriority;
   review?: ReviewFilter;
+  extensions_only?: boolean;
 }) =>
   api
     .get<QueueExport>('/requests/queue/export', { params, timeout: 120_000 })
@@ -708,13 +714,45 @@ export interface CabBookingBody {
 export const recordCabBooking = (requestId: number, body: CabBookingBody) =>
   api.put<TravelRequest>(`/requests/${requestId}/cab-booking`, body).then((r) => r.data);
 
-/** Ask to keep a decided cab one more day - the requester or a traveller on it. */
-export const askCabExtension = (requestId: number, reason: string) =>
-  api
-    .post<TravelRequest>(`/requests/${requestId}/cab-extension`, { reason })
-    .then((r) => r.data);
+/** What extending a trip takes: a cab's pickup on the first extra day and
+ *  until when, or a stay's new check-out. */
+export interface ExtensionBody {
+  reason: string;
+  /** Traveller rows on the trip; left out, everyone approved or booked. */
+  traveller_ids?: number[];
+  start_at?: string | null;
+  end_at?: string | null;
+  check_out?: string | null;
+  priority?: RequestPriority;
+}
 
-/** An admin's answer to "one more day". A rejection needs a comment. */
+/** Carry a decided cab or stay on for more days. Returns the extension: a new
+ *  request, linked to this one, waiting for an admin. */
+export const extendTrip = (requestId: number, body: ExtensionBody) =>
+  api.post<TravelRequest>(`/requests/${requestId}/extend`, body).then((r) => r.data);
+
+/** Book one or more approved travellers in one step - see BookingModal. */
+export interface BookingBody {
+  traveller_ids: number[];
+  booking_reference?: string | null;
+  booking_details?: BookingDetails | null;
+  /** The note to the traveller. */
+  note: string;
+  /** A cab only: the car sent. */
+  cab?: Omit<CabBookingBody, 'notify' | 'vendor_id'> | null;
+  /** Files already uploaded for these travellers; all go with the email. */
+  ticket_ids?: number[];
+  /** The total for everyone booked, split evenly. A string: money is never a float. */
+  cost_amount?: string | null;
+  /** Sent: recorded for everyone booked (null clears it). Left out: kept. */
+  vendor_id?: number | null;
+  notify?: boolean;
+}
+
+export const bookTravellers = (requestId: number, body: BookingBody) =>
+  api.post<TravelRequest>(`/requests/${requestId}/book`, body).then((r) => r.data);
+
+/** An admin's answer to the older "one more day" ask. A rejection needs a comment. */
 /** Approve an ask to cancel (the trip is cancelled) or reject it with a comment. */
 export const decideCancellation = (
   requestId: number,
@@ -762,11 +800,13 @@ export const discardTicket = (ticketId: number) =>
 export const fetchTicketFile = (ticketId: number) =>
   api.get(`/tickets/${ticketId}/file`, { responseType: 'blob' }).then((r) => r.data as Blob);
 
-/** A traveller's own confirmed ticket, for them (or the person who asked for
- *  the trip) to keep. */
-export const fetchMyTicket = (requestId: number, travellerId: number) =>
+/** One of the files on a traveller's booking, for them (or the person who
+ *  asked for the trip) to keep. */
+export const fetchMyTicketFile = (requestId: number, travellerId: number, ticketId: number) =>
   api
-    .get(`/requests/${requestId}/travellers/${travellerId}/ticket`, { responseType: 'blob' })
+    .get(`/requests/${requestId}/travellers/${travellerId}/tickets/${ticketId}`, {
+      responseType: 'blob',
+    })
     .then((r) => r.data as Blob);
 
 // --- the notification ledger ----------------------------------------------
@@ -874,7 +914,9 @@ export const updateVendor = (id: number, payload: Partial<VendorPayload>) =>
 export const setVendorActive = (id: number, active: boolean) =>
   api.post<Vendor>(`/vendors/${id}/${active ? 'activate' : 'deactivate'}`).then((r) => r.data);
 
-export const fetchInvoices = (params: { status?: InvoiceStatus; vendor_id?: number; limit?: number } = {}) =>
+export const fetchInvoices = (
+  params: { status?: InvoiceStatus; vendor_id?: number; payment?: PaymentFilter; limit?: number } = {},
+) =>
   api.get<InvoiceList>('/invoices', { params }).then((r) => r.data);
 
 export const fetchInvoice = (id: number) =>
@@ -914,11 +956,28 @@ export const submitInvoice = (id: number) =>
 
 /** `expected_total` is the total on screen: if a cost moved it since, the
  *  server refuses and the page shows the new figures instead. */
-export const approveInvoice = (id: number, body: { comment?: string | null; expected_total?: string }) =>
+export const approveInvoice = (
+  id: number,
+  body: {
+    comment?: string | null;
+    expected_total?: string;
+    /** Paid already, in the same step; left out, approved and still to be paid. */
+    paid?: boolean;
+    paid_on?: string | null;
+    payment_reference?: string | null;
+  },
+) =>
   api.post<Invoice>(`/invoices/${id}/approve`, body).then((r) => r.data);
 
 export const rejectInvoice = (id: number, comment: string) =>
   api.post<Invoice>(`/invoices/${id}/reject`, { comment }).then((r) => r.data);
+
+/** Mark an approved invoice paid - or, correcting a mistake, not paid after
+ *  all, which needs a comment. Super admins only. */
+export const recordInvoicePayment = (
+  id: number,
+  body: { paid: boolean; paid_on?: string | null; payment_reference?: string | null; comment?: string | null },
+) => api.post<Invoice>(`/invoices/${id}/payment`, body).then((r) => r.data);
 
 export const deleteInvoice = (id: number) => api.delete(`/invoices/${id}`).then(() => undefined);
 

@@ -132,10 +132,21 @@ def build(
     return message
 
 
-def _usable_copies(to_address: str, cc: list[str] | None) -> list[str]:
-    """The Cc list worth sending: real addresses, each once, never the main
-    recipient again."""
-    seen = {to_address.strip().lower()}
+def recipients(to_address: str) -> list[str]:
+    """The To line as a list: usually one address, several when one message
+    went to everyone booked together. Real addresses only, each once."""
+    kept: list[str] = []
+    for address in (to_address or "").split(","):
+        address = address.strip()
+        if "@" in address and address.lower() not in {a.lower() for a in kept}:
+            kept.append(address)
+    return kept
+
+
+def _usable_copies(to: list[str], cc: list[str] | None) -> list[str]:
+    """The Cc list worth sending: real addresses, each once, never anyone
+    already on the To line."""
+    seen = {address.lower() for address in to}
     kept: list[str] = []
     for address in cc or []:
         address = (address or "").strip()
@@ -160,17 +171,23 @@ def send(
     belongs to its main recipient, so whether it goes at all is decided by
     them; each copy then passes the same allowlist on its own, and one that
     may not be mailed here is simply left off.
+
+    `to_address` may name several people, comma separated - everyone booked
+    together. The first is the main recipient; the rest are treated like the
+    copies: each passes the allowlist on its own.
     """
     settings = get_settings()
 
-    if not to_address or "@" not in to_address:
+    to = recipients(to_address)
+    if not to:
         return Sent(ok=False, detail="no usable address on this account")
+    to_address = to[0]
 
-    copies = _usable_copies(to_address, cc)
+    copies = _usable_copies(to, cc)
 
     if _outbox is not None:
         _outbox.messages.append(
-            {"to": to_address, "cc": copies, "subject": subject, "body": body,
+            {"to": ", ".join(to), "cc": copies, "subject": subject, "body": body,
              "attachments": [item.name for item in attachments or []]}
         )
         return Sent(ok=True)
@@ -192,10 +209,11 @@ def send(
             detail="address is outside EMAIL_ALLOWLIST for this environment",
         )
 
-    held_back = [address for address in copies if not _may_send_to(address)]
+    held_back = [address for address in [*to[1:], *copies] if not _may_send_to(address)]
     if held_back:
         logger.info("Copy to %s not sent: outside EMAIL_ALLOWLIST", ", ".join(held_back))
         copies = [address for address in copies if address not in held_back]
+    to = [to_address, *(address for address in to[1:] if address not in held_back)]
 
     missing = missing_settings()
     if missing:
@@ -207,11 +225,11 @@ def send(
         with _connect(settings) as smtp:
             smtp.login(settings.smtp_username, settings.smtp_app_password)
             smtp.send_message(
-                build(to_address, subject, body, cc=copies, attachments=attachments)
+                build(", ".join(to), subject, body, cc=copies, attachments=attachments)
             )
         logger.info(
             "Mail sent to %s%s: %s",
-            to_address, f" (cc {', '.join(copies)})" if copies else "", subject,
+            ", ".join(to), f" (cc {', '.join(copies)})" if copies else "", subject,
         )
         return Sent(ok=True)
     except Exception as exc:

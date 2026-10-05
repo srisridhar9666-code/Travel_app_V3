@@ -143,6 +143,7 @@ def notify(
     deliver_now: bool = True,
     cc_users: list[User] | None = None,
     attachment: AttachedFile | None = None,
+    attachments: list[AttachedFile] | None = None,
 ) -> list[Notification]:
     """Record a notice and try to deliver it.
 
@@ -164,7 +165,7 @@ def notify(
     Anything the people copied should see in the app is the caller's to write.
 
     `attachment` goes with the email only - a ticket file, read from storage
-    when the message is sent.
+    when the message is sent. `attachments` is the same for several files.
     """
     category = category_of(kind)
 
@@ -216,6 +217,115 @@ def notify(
             attachment_path=attachment.path if attachment else None,
             attachment_name=(attachment.name[:255] if attachment else None),
             attachment_type=(attachment.content_type if attachment else None),
+            attachments=_stored_files(attachments),
+        )
+        db.add(mail)
+        db.flush()
+        if deliver_now:
+            deliver(mail)
+        rows.append(mail)
+
+    db.flush()
+    return rows
+
+
+def _stored_files(files: list[AttachedFile] | None) -> list[dict] | None:
+    """Files as the `attachments` column keeps them, each once."""
+    kept: list[dict] = []
+    seen: set[str] = set()
+    for item in files or []:
+        if not item.path or item.path in seen:
+            continue
+        seen.add(item.path)
+        kept.append({"path": item.path, "name": item.name[:255], "type": item.content_type})
+    return kept or None
+
+
+#: The To column is 500 characters; past that the rest are mailed on their own.
+_TO_MAX = 500
+
+
+def notify_group(
+    db: Session,
+    *,
+    tenant_id: str,
+    people: list[User],
+    kind: str,
+    title: str,
+    body: str,
+    request_id: int | None = None,
+    email_subject: str | None = None,
+    email_body: str | None = None,
+    cc_users: list[User] | None = None,
+    attachments: list[AttachedFile] | None = None,
+    send_email: bool = True,
+    deliver_now: bool = True,
+) -> list[Notification]:
+    """One notice to several people at once: each gets their in-app row, and
+    one email goes to all of them together, with `cc_users` copied.
+
+    For things that happened to a group as one - four colleagues booked into
+    the same cab. Four near-identical emails, each copying the same manager,
+    is how a manager learns to ignore the travel desk; one message with
+    everyone on it is what a person at a travel desk would send.
+
+    Each person's own preferences still decide whether they are on the email.
+    The row belongs to the first person on it; the others are in its To line,
+    so "was this person told?" is answered by their in-app row and that line.
+    """
+    category = category_of(kind)
+    rows: list[Notification] = []
+    unique: list[User] = []
+    for person in people:
+        if person is not None and all(person.id != p.id for p in unique):
+            unique.append(person)
+
+    for person in unique:
+        in_app = Notification(
+            tenant_id=tenant_id,
+            user_id=person.id,
+            kind=kind,
+            category=category,
+            title=title,
+            body=body,
+            request_id=request_id,
+            channel=NotificationChannel.IN_APP,
+            status=NotificationStatus.SENT,
+            sent_at=naive_utcnow(),
+        )
+        db.add(in_app)
+        rows.append(in_app)
+
+    mailable = [
+        p for p in unique
+        if send_email and p.is_active and p.email and "@" in p.email
+        and wants(db, p, category, NotificationChannel.EMAIL)
+    ]
+    # Everyone that fits on one To line shares a message; anyone past it gets
+    # the same message on their own rather than being dropped.
+    batches: list[list[User]] = []
+    for person in mailable:
+        if batches and len(", ".join(p.email for p in [*batches[-1], person])) <= _TO_MAX:
+            batches[-1].append(person)
+        else:
+            batches.append([person])
+
+    for batch in batches:
+        lead = batch[0]
+        mail = Notification(
+            tenant_id=tenant_id,
+            user_id=lead.id,
+            kind=kind,
+            category=category,
+            title=title,
+            body=email_body or body,
+            request_id=request_id,
+            channel=NotificationChannel.EMAIL,
+            status=NotificationStatus.QUEUED,
+            to_address=", ".join(p.email for p in batch),
+            cc_addresses=_cc_line(lead, cc_users, also_to=batch),
+            subject=(email_subject or title)[:255],
+            attachments=_stored_files(attachments),
         )
         db.add(mail)
         db.flush()
@@ -232,10 +342,16 @@ def notify(
 _CC_MAX = 500
 
 
-def _cc_line(recipient: User, cc_users: list[User] | None) -> str | None:
+def _cc_line(
+    recipient: User, cc_users: list[User] | None, *, also_to: list[User] | None = None
+) -> str | None:
     """The Cc list as stored on the email row: active people with an address,
-    each once, never the recipient themself."""
-    seen = {recipient.email.lower()} if recipient.email else set()
+    each once, never anyone the message is already addressed to."""
+    seen = {
+        person.email.lower()
+        for person in [recipient, *(also_to or [])]
+        if person is not None and person.email
+    }
     kept: list[str] = []
     for person in cc_users or []:
         address = (person.email or "").strip()
@@ -282,18 +398,34 @@ def deliver(notification: Notification) -> Notification:
     notification.attempts += 1
     body = notification.body
     files: list[email.Attachment] = []
-    if notification.attachment_path:
+    wanted = [
+        (notification.attachment_path, notification.attachment_name, notification.attachment_type)
+    ] + [
+        (item.get("path"), item.get("name"), item.get("type"))
+        for item in (notification.attachments or [])
+        if isinstance(item, dict)
+    ]
+    missing = 0
+    for path, name, content_type in wanted:
+        if not path:
+            continue
         try:
             files.append(
                 email.Attachment(
-                    name=notification.attachment_name or "attachment",
-                    content_type=notification.attachment_type or "application/octet-stream",
-                    data=storage.read(notification.attachment_path),
+                    name=name or "attachment",
+                    content_type=content_type or "application/octet-stream",
+                    data=storage.read(path),
                 )
             )
         except Exception:   # a missing file must not stop the message itself
             logger.warning("Attachment for notification %s could not be read", notification.id)
-            body += "\n\n(The file could not be attached - it is on My requests in the app.)"
+            missing += 1
+    if missing:
+        body += (
+            "\n\n(The file could not be attached - it is on My requests in the app.)"
+            if missing == 1
+            else f"\n\n({missing} files could not be attached - they are on My requests in the app.)"
+        )
     args = (
         notification.to_address or "",
         notification.subject or notification.title,

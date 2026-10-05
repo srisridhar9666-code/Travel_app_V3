@@ -19,10 +19,8 @@ from sqlalchemy.orm import Session
 
 from app.core import clock
 from app.core.deps import AdminUser, DbSession
-from app.core.enums import AuditAction, TravellerStatus
-from app.models.base import naive_utcnow
+from app.core.enums import AuditAction
 from app.models.request import RequestTraveller, TravelRequest
-from app.models.vendor import Vendor
 from app.schemas.analytics import (
     AnalyticsBundle,
     CampaignSpend,
@@ -40,7 +38,7 @@ from app.schemas.analytics import (
 )
 from app.routers.insights import ReportFilters
 from app.schemas.request import RequestRead
-from app.services import analytics, audit, costs, invoices, notifications, vendors
+from app.services import analytics, audit, cost_entry, costs, invoices, notifications
 from app.services import requests as svc
 
 router = APIRouter(tags=["analytics"])
@@ -62,79 +60,6 @@ def _travellers(row: TravelRequest, ids: list[int]) -> list[RequestTraveller]:
             detail=f"Traveller(s) {', '.join(str(m) for m in missing)} are not on this request.",
         )
     return [by_id[i] for i in ids]
-
-
-def _assert_costable(traveller: RequestTraveller) -> None:
-    """A cost belongs to a trip that is happening.
-
-    Recording spend against a rejected traveller would quietly inflate a
-    campaign's total with money nobody paid.
-    """
-    if traveller.status in (TravellerStatus.REJECTED, TravellerStatus.CANCELLED):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"{traveller.user.full_name} was "
-                f"{str(traveller.status).lower()}, so there is no cost to record."
-            ),
-        )
-
-
-class _VendorChoice:
-    """What the payload said about who was paid: nothing (each traveller keeps
-    theirs), a vendor, or null to clear it."""
-
-    def __init__(self, sent: bool, vendor: Vendor | None):
-        self.sent = sent
-        self.vendor = vendor
-
-    def id_for(self, traveller: RequestTraveller) -> int | None:
-        if not self.sent:
-            return traveller.vendor_id
-        return self.vendor.id if self.vendor is not None else None
-
-
-def _vendor_choice(
-    db: Session, actor, payload, travellers: list[RequestTraveller]
-) -> _VendorChoice:
-    if "vendor_id" not in payload.model_fields_set:
-        return _VendorChoice(False, None)
-    keeping = {t.vendor_id for t in travellers if t.vendor_id is not None}
-    return _VendorChoice(True, vendors.pick(db, actor.tenant_id, payload.vendor_id, keeping=keeping))
-
-
-def _apply(
-    db: Session,
-    *,
-    traveller: RequestTraveller,
-    amount,
-    note: str | None,
-    actor,
-    vendor: _VendorChoice,
-) -> dict:
-    before = traveller.cost_amount
-    vendor_before = vendors.name_of(traveller)
-    traveller.cost_amount = costs.to_money(amount) if amount is not None else None
-    traveller.cost_currency = costs.DEFAULT_CURRENCY
-    traveller.cost_note = (note or "").strip() or None
-    traveller.cost_entered_by_id = actor.id
-    traveller.cost_entered_at = naive_utcnow()
-    if vendor.sent:
-        traveller.vendor = vendor.vendor
-        traveller.vendor_id = vendor.id_for(traveller)
-    change = {
-        "traveller": traveller.user.full_name,
-        "from": str(before) if before is not None else None,
-        "to": str(traveller.cost_amount) if traveller.cost_amount is not None else None,
-    }
-    vendor_after = vendors.name_of(traveller)
-    if vendor_after != vendor_before:
-        change["vendor"] = {"from": vendor_before, "to": vendor_after}
-    return change
-
-
-def _paid_to(vendor: _VendorChoice) -> str:
-    return f", paid to {vendor.vendor.name}" if vendor.sent and vendor.vendor else ""
 
 
 # ---------------------------------------------------------------------------
@@ -169,8 +94,11 @@ def set_costs(
         )
     travellers = _travellers(row, ids)
     for traveller in travellers:
-        _assert_costable(traveller)
-    vendor = _vendor_choice(db, actor, payload, travellers)
+        cost_entry.assert_costable(traveller)
+    vendor = cost_entry.vendor_choice(
+        db, actor.tenant_id, travellers,
+        sent="vendor_id" in payload.model_fields_set, vendor_id=payload.vendor_id,
+    )
     invoices.guard_cost_change(
         db,
         [
@@ -180,7 +108,7 @@ def set_costs(
     )
 
     changes = [
-        _apply(db, traveller=traveller, amount=entry.amount, note=entry.note, actor=actor,
+        cost_entry.apply(db, traveller=traveller, amount=entry.amount, note=entry.note, actor=actor,
                vendor=vendor)
         for entry, traveller in zip(payload.amounts, travellers, strict=True)
     ]
@@ -190,7 +118,7 @@ def set_costs(
         action=AuditAction.UPDATE,
         entity_type="travel_request",
         entity_id=row.id,
-        summary=f"{actor.full_name} recorded cost on request {row.id}{_paid_to(vendor)}",
+        summary=f"{actor.full_name} recorded cost on request {row.id}{cost_entry.paid_to(vendor)}",
         changes={"costs": changes},
         tenant_id=actor.tenant_id,
         actor=actor,
@@ -253,18 +181,21 @@ def split_cost(
         )
     travellers = _travellers(row, payload.traveller_ids)
     for traveller in travellers:
-        _assert_costable(traveller)
+        cost_entry.assert_costable(traveller)
 
     shares = costs.split_evenly(payload.total_amount, len(travellers))
     note = payload.note or f"Shared cost, split {len(travellers)} ways"
-    vendor = _vendor_choice(db, actor, payload, travellers)
+    vendor = cost_entry.vendor_choice(
+        db, actor.tenant_id, travellers,
+        sent="vendor_id" in payload.model_fields_set, vendor_id=payload.vendor_id,
+    )
     invoices.guard_cost_change(
         db,
         [(t, share, vendor.id_for(t)) for t, share in zip(travellers, shares, strict=True)],
     )
 
     changes = [
-        _apply(db, traveller=traveller, amount=share, note=note, actor=actor, vendor=vendor)
+        cost_entry.apply(db, traveller=traveller, amount=share, note=note, actor=actor, vendor=vendor)
         for traveller, share in zip(travellers, shares, strict=True)
     ]
 
@@ -275,7 +206,7 @@ def split_cost(
         entity_id=row.id,
         summary=(
             f"{actor.full_name} split {costs.to_money(payload.total_amount)} "
-            f"across {len(travellers)} traveller(s) on request {row.id}{_paid_to(vendor)}"
+            f"across {len(travellers)} traveller(s) on request {row.id}{cost_entry.paid_to(vendor)}"
         ),
         changes={"total": str(costs.to_money(payload.total_amount)), "costs": changes},
         tenant_id=actor.tenant_id,

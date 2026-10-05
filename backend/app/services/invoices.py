@@ -37,6 +37,7 @@ from app.config import get_settings
 from app.core import clock
 from app.core.enums import AuditAction, InvoiceStatus, RequestType, Role, TravellerStatus
 from app.models.audit import AuditLog
+from app.models.base import naive_utcnow
 from app.models.invoice import Invoice, InvoiceLine
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
@@ -630,6 +631,79 @@ def follow_costs(
 
 
 # ---------------------------------------------------------------------------
+# Payment, after approval
+# ---------------------------------------------------------------------------
+
+
+def payment_label(invoice: Invoice) -> str | None:
+    """"Paid on 05 Oct 2026, ref UTR123" or "Not paid yet" for an approved
+    invoice; None for one not approved, where payment does not arise."""
+    if invoice.status is not InvoiceStatus.APPROVED:
+        return None
+    if invoice.paid_on is None:
+        return "Not paid yet"
+    label = f"Paid on {day(invoice.paid_on)}"
+    if invoice.payment_reference:
+        label += f", ref {invoice.payment_reference}"
+    return label
+
+
+def payment_phrase(invoice: Invoice) -> str:
+    """The payment label mid-sentence: "paid on 05 Oct 2026, ref UTR123"."""
+    label = payment_label(invoice) or ""
+    return label[:1].lower() + label[1:]
+
+
+def mark_paid(
+    invoice: Invoice, actor: User, *, paid_on: date | None, reference: str | None
+) -> dict:
+    """Record the payment. Only an approved invoice is paid, and never on a
+    day still to come - a payment is recorded once it has happened. Returns
+    the change for the activity log."""
+    if invoice.status is not InvoiceStatus.APPROVED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{invoice.number} is not approved, so it cannot be paid yet.",
+        )
+    when = paid_on or clock.local_today()
+    if when > clock.local_today():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="The payment date is in the future. Record it once it is paid.",
+        )
+    before = {"paid_on": invoice.paid_on, "payment_reference": invoice.payment_reference}
+    invoice.paid_on = when
+    invoice.payment_reference = reference
+    invoice.paid_by_id = actor.id
+    invoice.paid_by = actor
+    invoice.paid_at = naive_utcnow()
+    return {
+        key: {"from": before[key], "to": getattr(invoice, key)}
+        for key in before
+        if before[key] != getattr(invoice, key)
+    }
+
+
+def mark_unpaid(invoice: Invoice) -> dict:
+    """Take a recorded payment back - a correction. Returns the change."""
+    if invoice.paid_on is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{invoice.number} is not marked paid.",
+        )
+    change = {
+        "paid_on": {"from": invoice.paid_on, "to": None},
+        "payment_reference": {"from": invoice.payment_reference, "to": None},
+    }
+    invoice.paid_on = None
+    invoice.payment_reference = None
+    invoice.paid_by_id = None
+    invoice.paid_by = None
+    invoice.paid_at = None
+    return change
+
+
+# ---------------------------------------------------------------------------
 # Telling people
 # ---------------------------------------------------------------------------
 
@@ -703,6 +777,8 @@ def tell_preparers(db: Session, invoice: Invoice, actor: User) -> list[int]:
     what = f"{actor.full_name} {verdict} {invoice.number} from {invoice.vendor.name}, {inr(invoice.total_amount)}."
     if comment:
         what += f" Comment: {comment}"
+    if approved:
+        what += f" {payment_label(invoice)}."
     if not approved:
         what += " Fix it and submit it again."
 
@@ -736,3 +812,30 @@ def tell_preparers(db: Session, invoice: Invoice, actor: User) -> list[int]:
             )
         )
     return queued
+
+
+def tell_preparers_of_payment(db: Session, invoice: Invoice, actor: User) -> None:
+    """Whoever prepared it hears, in the app, that it was paid - or that a
+    recorded payment was taken back. In app only: nobody has to act on it."""
+    people: dict[int, User] = {}
+    for person in (invoice.submitted_by, invoice.created_by):
+        if person is not None and person.is_active and person.id != actor.id:
+            people.setdefault(person.id, person)
+    paid = invoice.paid_on is not None
+    for person in people.values():
+        notifications.notify(
+            db,
+            tenant_id=invoice.tenant_id,
+            user=person,
+            kind="INVOICE_PAID",
+            title=(
+                f"Invoice {invoice.number} paid"
+                if paid
+                else f"Invoice {invoice.number} is not paid after all"
+            ),
+            body=(
+                f"{actor.full_name} recorded {invoice.number} from {invoice.vendor.name}, "
+                f"{inr(invoice.total_amount)}, as {payment_phrase(invoice)}."
+            ),
+            send_email=False,
+        )

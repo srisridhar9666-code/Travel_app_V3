@@ -44,8 +44,8 @@ from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
 from app.schemas.request import (
     BatchDecisionPayload,
+    BookingPayload,
     CabBookingPayload,
-    CabExtensionAsk,
     CabExtensionDecision,
     CancelPayload,
     CancellationDecision,
@@ -54,6 +54,7 @@ from app.schemas.request import (
     ConflictCheckRequest,
     ConflictCheckResponse,
     DecisionPayload,
+    ExtensionAsk,
     QueueCounts,
     QueueExport,
     RecommendationPayload,
@@ -67,10 +68,12 @@ from app.schemas.request import (
 )
 from app.services import (
     audit,
+    booking,
     cabs,
     cancellations,
     costay,
     decisions,
+    extensions,
     notifications,
     recommendations,
 )
@@ -87,9 +90,10 @@ WAITING = frozenset({RequestStatus.SUBMITTED, RequestStatus.PARTIALLY_APPROVED})
 #: their view. For a manager both mean their own team only.
 Review = Literal["waiting", "reviewed"]
 
-#: Cabs whose travellers asked to keep them one more day and are still waiting
-#: on an admin. They sit on whichever tab their travellers' status puts them,
-#: so the queue lists them on their own as well.
+#: Cabs whose travellers used the older "one more day" ask and are still
+#: waiting on an admin. They sit on whichever tab their travellers' status puts
+#: them, so the queue lists them on their own as well. (Extending a trip now
+#: raises a linked request - see `extensions_only`.)
 Extension = Literal["pending"]
 Cancellation = Literal["pending"]
 
@@ -280,6 +284,7 @@ def _matching(
     review: Review | None = None,
     extension: Extension | None = None,
     cancellation: Cancellation | None = None,
+    extensions_only: bool = False,
 ) -> list[TravelRequest]:
     """Every request the caller may see that matches the filters, in order.
 
@@ -319,6 +324,8 @@ def _matching(
             TravelRequest.cab_extension_status == CabExtensionStatus.PENDING,
             TravelRequest.is_cancelled.is_(False),
         ]
+    if extensions_only:
+        filters.append(TravelRequest.extends_request_id.is_not(None))
     if project_id is not None:
         filters.append(TravelRequest.project_id == project_id)
     if priority is not None:
@@ -404,6 +411,9 @@ def list_requests(
     cancellation: Annotated[
         Cancellation | None, Query(description="Decided trips whose requester asked to cancel")
     ] = None,
+    extensions_only: Annotated[
+        bool, Query(description="Only extensions: a cab kept longer, a stay made longer")
+    ] = False,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> RequestListResponse:
@@ -431,6 +441,7 @@ def list_requests(
         review=review,
         extension=extension,
         cancellation=cancellation,
+        extensions_only=extensions_only,
     )
 
     total = len(rows)
@@ -542,6 +553,7 @@ def queue_counts(
     search: Annotated[str | None, Query(max_length=120)] = None,
     priority: Annotated[RequestPriority | None, Query()] = None,
     review: Annotated[Review | None, Query()] = None,
+    extensions_only: Annotated[bool, Query()] = False,
 ) -> QueueCounts:
     """Headline numbers for the admin queue tabs.
 
@@ -565,6 +577,7 @@ def queue_counts(
             priority=priority,
             sort="newest",
             review=review,
+            extensions_only=extensions_only,
         )
         if not row.is_draft
     ]
@@ -574,6 +587,7 @@ def queue_counts(
     edited = 0
     on_manager = 0
     extensions = 0
+    extension_asks = 0
     cancel_asks = 0
     urgent = {s: 0 for s in WAITING}
     for row in rows:
@@ -581,6 +595,8 @@ def queue_counts(
         tally[row_status] += 1
         if _extension_pending(row):
             extensions += 1
+        if row.extends_request_id is not None and row_status in WAITING:
+            extension_asks += 1
         if cancellations.is_pending(row) and cancellations.may_decide(row, actor):
             cancel_asks += 1
         if row.priority is RequestPriority.HIGH and row_status in WAITING:
@@ -612,6 +628,7 @@ def queue_counts(
         awaiting_manager=on_manager,
         cab_extensions=extensions,
         cancellations=cancel_asks,
+        extensions=extension_asks,
     )
 
 
@@ -625,6 +642,7 @@ def export_queue(
     search: Annotated[str | None, Query(max_length=120)] = None,
     priority: Annotated[RequestPriority | None, Query()] = None,
     review: Annotated[Review | None, Query()] = None,
+    extensions_only: Annotated[bool, Query()] = False,
 ) -> QueueExport:
     """Every request in one queue tab, for the admin's CSV.
 
@@ -643,6 +661,7 @@ def export_queue(
         priority=priority,
         sort="priority",
         review=review,
+        extensions_only=extensions_only,
     )
     total = len(rows)
     rows = rows[: svc.MAX_EXPORT_ROWS]
@@ -1287,6 +1306,27 @@ def decide_batch(
     return svc.to_read(db, row, tenant_id=actor.tenant_id, viewer=actor, with_conflicts=True)
 
 
+@router.post("/{request_id}/book", response_model=RequestRead)
+def book_travellers(
+    request_id: int,
+    payload: BookingPayload,
+    actor: AdminUser,
+    http_request: Request,
+    db: DbSession,
+    background: BackgroundTasks,
+) -> RequestRead:
+    """Book one or more approved travellers in one step: reference, details,
+    the car for a cab, the files, the cost and who was paid - and one email to
+    them all, their managers copied, every file attached. All or nothing."""
+    row = _load(db, request_id, actor)
+    _decidable(row)
+    queued = booking.book(db, request=row, admin=actor, payload=payload, http_request=http_request)
+    db.commit()
+    background.add_task(notifications.deliver_queued, queued)
+    db.refresh(row)
+    return _read_and_release(db, row, actor)
+
+
 # ---------------------------------------------------------------------------
 # The manager's recommendation: the first of the two levels.
 # ---------------------------------------------------------------------------
@@ -1325,7 +1365,7 @@ def recommend(
 
 
 # ---------------------------------------------------------------------------
-# Cabs: the car that was sent, and one more day.
+# Cabs: the car that was sent. Extending a cab or a stay.
 # ---------------------------------------------------------------------------
 
 
@@ -1355,29 +1395,32 @@ def record_cab(
     return _read_and_release(db, row, actor)
 
 
-@router.post("/{request_id}/cab-extension", response_model=RequestRead)
-def ask_cab_extension(
+@router.post(
+    "/{request_id}/extend", response_model=RequestRead, status_code=status.HTTP_201_CREATED
+)
+def extend_trip(
     request_id: int,
-    payload: CabExtensionAsk,
+    payload: ExtensionAsk,
     user: CurrentUser,
     http_request: Request,
     db: DbSession,
     background: BackgroundTasks,
 ) -> RequestRead:
-    """Ask to keep a decided cab one more day, with a reason.
+    """Carry a decided cab or stay on for more days, with a reason.
 
-    For the requester or anyone riding in it, once an admin has acted - before
-    that the requester simply edits the end time. One ask at a time; an admin
-    approves or rejects it.
+    For someone approved or booked on it. The extension is a new request,
+    linked to this one, straight into the admin queue: decided and booked like
+    any other, so a different car or room, and its own cost, are no trouble.
+    Returns the extension.
     """
     row = _load(db, request_id, user)
-    queued = cabs.ask_extension(
-        db, request=row, asker=user, reason=payload.reason, http_request=http_request
+    child, queued = extensions.extend(
+        db, request=row, asker=user, payload=payload, http_request=http_request
     )
     db.commit()
     background.add_task(notifications.deliver_queued, queued)
-    db.refresh(row)
-    return _read_and_release(db, row, user)
+    db.refresh(child)
+    return _read_and_release(db, child, user)
 
 
 @router.post("/{request_id}/cab-extension/decide", response_model=RequestRead)

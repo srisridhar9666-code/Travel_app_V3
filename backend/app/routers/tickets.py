@@ -407,6 +407,51 @@ def download_ticket(ticket_id: int, actor: AdminUser, db: DbSession) -> Response
     )
 
 
+def _may_download(db: Session, request_id: int, traveller_id: int, user: User) -> bool:
+    """The traveller themself, whoever raised the request (they often book for
+    a group), and admins."""
+    row = db.get(TravelRequest, request_id)
+    traveller = (
+        next((t for t in row.travellers if t.id == traveller_id), None)
+        if row is not None and row.tenant_id == user.tenant_id
+        else None
+    )
+    return traveller is not None and (
+        user.is_admin or user.id in (traveller.user_id, row.requester_id)
+    )
+
+
+def _confirmed_file(ticket: TicketDocument) -> Response:
+    return Response(
+        content=storage.read(ticket.file_path),
+        media_type=ticket.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'inline; filename="{ticket.file_name or "ticket"}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/requests/{request_id}/travellers/{traveller_id}/tickets/{ticket_id}")
+def my_ticket_file(
+    request_id: int, traveller_id: int, ticket_id: int, user: CurrentUser, db: DbSession
+) -> Response:
+    """One of the files sent with a traveller's booking - a booking can carry
+    several. Same people as below, and only a confirmed file."""
+    ticket = db.get(TicketDocument, ticket_id) if _may_download(
+        db, request_id, traveller_id, user
+    ) else None
+    if (
+        ticket is None
+        or ticket.request_id != request_id
+        or ticket.traveller_id != traveller_id
+        or ticket.status is not TicketStatus.CONFIRMED
+        or not ticket.file_path
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such file to download.")
+    return _confirmed_file(ticket)
+
+
 @router.get("/requests/{request_id}/travellers/{traveller_id}/ticket")
 def my_ticket(request_id: int, traveller_id: int, user: CurrentUser, db: DbSession) -> Response:
     """A traveller's confirmed ticket, for the traveller themself.
@@ -415,15 +460,6 @@ def my_ticket(request_id: int, traveller_id: int, user: CurrentUser, db: DbSessi
     admins. Only a confirmed ticket - one an admin has checked and booked
     against - is ever handed out; one still under review is not theirs yet.
     """
-    row = db.get(TravelRequest, request_id)
-    traveller = (
-        next((t for t in row.travellers if t.id == traveller_id), None)
-        if row is not None and row.tenant_id == user.tenant_id
-        else None
-    )
-    allowed = traveller is not None and (
-        user.is_admin or user.id in (traveller.user_id, row.requester_id)
-    )
     ticket = (
         db.execute(
             select(TicketDocument)
@@ -435,19 +471,12 @@ def my_ticket(request_id: int, traveller_id: int, user: CurrentUser, db: DbSessi
             )
             .order_by(TicketDocument.id.desc())
         ).scalars().first()
-        if allowed
+        if _may_download(db, request_id, traveller_id, user)
         else None
     )
     if ticket is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No ticket to download yet.")
-    return Response(
-        content=storage.read(ticket.file_path),
-        media_type=ticket.content_type or "application/octet-stream",
-        headers={
-            "Content-Disposition": f'inline; filename="{ticket.file_name or "ticket"}"',
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
+    return _confirmed_file(ticket)
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import toast from 'react-hot-toast';
 import { CabExtensionNote, CabSent } from '@/components/CabDetails';
 import { BookingSummary } from '@/components/BookingDetails';
 import { CancellationNote } from '@/components/CancellationAsks';
+import { ExtendTripModal } from '@/components/ExtendTripModal';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
 import RequestForm, { ConflictList } from '@/components/RequestForm';
@@ -35,10 +36,9 @@ import {
   Skeleton,
 } from '@/components/ui';
 import {
-  askCabExtension,
   cancelRequest,
   errorMessage,
-  fetchMyTicket,
+  fetchMyTicketFile,
   fetchNotifications,
   fetchRequest,
   fetchRequests,
@@ -58,6 +58,7 @@ import {
   TRAVELLER_STATUS_LABELS,
   TRAVEL_MODE_LABELS,
   type RequestStatus,
+  type RequestTraveller,
   type RequestType,
   type TravelRequest,
 } from '@/types';
@@ -89,15 +90,6 @@ const dayTime = (iso: string) =>
     hour: '2-digit',
     minute: '2-digit',
   });
-
-/** The same wall-clock time a day later. Trip times are local as typed, so
- *  the date is moved on the string's own fields, never through a time zone. */
-function plusOneDay(iso: string): string {
-  const [date, time = '00:00:00'] = iso.split('T');
-  const next = new Date(`${date}T00:00:00Z`);
-  next.setUTCDate(next.getUTCDate() + 1);
-  return `${next.toISOString().slice(0, 10)}T${time}`;
-}
 
 /** One line describing where and when, whatever the request type. */
 function itinerary(request: TravelRequest): string {
@@ -181,14 +173,55 @@ export default function RequestsPage() {
 
   // The tab opens inside the click; the file follows once it has arrived.
   const downloadTicket = useMutation({
-    mutationFn: (vars: { requestId: number; travellerId: number; tab: Window | null }) =>
-      showFile(vars.tab, () => fetchMyTicket(vars.requestId, vars.travellerId), 'ticket'),
+    mutationFn: (vars: {
+      requestId: number;
+      travellerId: number;
+      ticketId: number;
+      name: string;
+      tab: Window | null;
+    }) =>
+      showFile(
+        vars.tab,
+        () => fetchMyTicketFile(vars.requestId, vars.travellerId, vars.ticketId),
+        vars.name,
+      ),
     meta: { errorFallback: 'Could not download the ticket.' },
   });
   const [cancelling, setCancelling] = useState<TravelRequest | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [extending, setExtending] = useState<TravelRequest | null>(null);
-  const [extendReason, setExtendReason] = useState('');
+
+  /** A download link for each file on someone's booking. */
+  const downloads = (request: TravelRequest, traveller: RequestTraveller) => {
+    const files = (traveller.ticket_files ?? []).filter((f) => f.confirmed);
+    if (files.length === 0) return undefined;
+    return (
+      <span className="flex flex-wrap gap-x-3">
+        {files.map((file, index) => (
+          <Button
+            key={file.id}
+            size="sm"
+            variant="link"
+            className="h-7 px-0"
+            title={file.file_name ?? undefined}
+            loading={downloadTicket.isPending && downloadTicket.variables?.ticketId === file.id}
+            onClick={() =>
+              downloadTicket.mutate({
+                requestId: request.id,
+                travellerId: traveller.id,
+                ticketId: file.id,
+                name: file.file_name ?? 'ticket',
+                tab: openFileTab(),
+              })
+            }
+          >
+            <Download size={13} />
+            {files.length === 1 ? 'Download ticket' : `File ${index + 1}`}
+          </Button>
+        ))}
+      </span>
+    );
+  };
 
   const requests = useQuery({
     queryKey: ['requests', statusFilter, typeFilter, search],
@@ -252,17 +285,6 @@ export default function RequestsPage() {
       );
       setCancelling(null);
       setCancelReason('');
-      refresh();
-    },
-  });
-
-  const extend = useMutation({
-    mutationFn: () => askCabExtension(extending!.id, extendReason),
-    meta: { errorFallback: 'Could not ask for one more day.' },
-    onSuccess: () => {
-      toast.success('Asked for one more day — an admin will decide');
-      setExtending(null);
-      setExtendReason('');
       refresh();
     },
   });
@@ -467,48 +489,53 @@ export default function RequestsPage() {
                         ))}
                       </div>
 
-                      {/* Not for cabs: the cab sent is shown in its own block. A
+                      {/* Extensions read as one trip carried on: each links to
+                          the other. */}
+                      {(request.extends_request_id || request.extended_by_request_id) && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {request.extends_request_id && (
+                            <Badge tone="brand">
+                              <CalendarPlus size={11} />
+                              Extends request {request.extends_request_id}
+                            </Badge>
+                          )}
+                          {request.extended_by_request_id && (
+                            <Badge tone="info">
+                              <CalendarPlus size={11} />
+                              Extended by request {request.extended_by_request_id}
+                            </Badge>
+                          )}
+                        </div>
+                      )}
+
+                      {/* A cab's car is its own block, below; here its files. A
                           ticket is offered to its traveller and to whoever asked
                           for the trip - the people the server will hand it to. */}
-                      {request.request_type !== 'LOCAL_CAB' &&
-                        request.travellers
-                          .filter(
-                            (t) =>
-                              t.status === 'BOOKED' &&
-                              (t.booking_reference || t.booking_details || t.ticket_ready),
-                          )
-                          .map((t) => (
-                            <BookingSummary
-                              key={t.id}
-                              reference={t.booking_reference}
-                              details={t.booking_details}
-                              title={t.user_id === me?.id ? 'Your booking' : `${t.full_name}'s booking`}
-                              action={
-                                t.ticket_ready &&
-                                (isOwner || t.user_id === me?.id) && (
-                                  <Button
-                                    size="sm"
-                                    variant="link"
-                                    className="h-7 px-0"
-                                    loading={
-                                      downloadTicket.isPending &&
-                                      downloadTicket.variables?.travellerId === t.id
-                                    }
-                                    onClick={() =>
-                                      downloadTicket.mutate({
-                                        requestId: request.id,
-                                        travellerId: t.id,
-                                        tab: openFileTab(),
-                                      })
-                                    }
-                                  >
-                                    <Download size={13} />
-                                    Download ticket
-                                  </Button>
-                                )
-                              }
-                            />
-                          ))}
+                      {request.travellers
+                        .filter(
+                          (t) =>
+                            t.status === 'BOOKED' &&
+                            (request.request_type === 'LOCAL_CAB'
+                              ? downloads(request, t)
+                              : t.booking_reference || t.booking_details || downloads(request, t)),
+                        )
+                        .map((t) => (
+                          <BookingSummary
+                            key={t.id}
+                            reference={request.request_type === 'LOCAL_CAB' ? null : t.booking_reference}
+                            details={request.request_type === 'LOCAL_CAB' ? null : t.booking_details}
+                            title={
+                              request.request_type === 'LOCAL_CAB'
+                                ? t.user_id === me?.id
+                                  ? 'Your cab booking'
+                                  : `${t.full_name}'s cab booking`
+                                : t.user_id === me?.id
+                                  ? 'Your booking'
+                                  : `${t.full_name}'s booking`
+                            }
+                            action={downloads(request, t)}
+                          />
+                        ))}
 
                       {request.cancel_reason && (
                         <p className="mt-2 text-xs text-text-subtle">
@@ -578,21 +605,20 @@ export default function RequestsPage() {
                   {/* Full width, below the row like the clash warnings: on a
                       phone the column beside the action icons is too narrow
                       for a plate and a phone number. */}
-                  {request.request_type === 'LOCAL_CAB' && (
+                  {(request.request_type === 'LOCAL_CAB' || request.can_extend) && (
                     <div className="mt-3 space-y-2 empty:hidden">
-                      <CabSent request={request} />
-                      <CabExtensionNote request={request} />
-                      {request.can_extend_cab && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => {
-                            setExtending(request);
-                            setExtendReason('');
-                          }}
-                        >
+                      {request.request_type === 'LOCAL_CAB' && (
+                        <>
+                          <CabSent request={request} />
+                          <CabExtensionNote request={request} />
+                        </>
+                      )}
+                      {request.can_extend && (
+                        <Button variant="secondary" size="sm" onClick={() => setExtending(request)}>
                           <CalendarPlus size={14} />
-                          Extend by a day
+                          {request.request_type === 'LOCAL_CAB'
+                            ? 'Need the cab longer?'
+                            : 'Need more nights?'}
                         </Button>
                       )}
                     </div>
@@ -715,47 +741,18 @@ export default function RequestsPage() {
         }}
       />
 
-      <Modal
-        open={extending !== null}
-        onClose={() => setExtending(null)}
-        title="Keep the cab one more day"
-        description={
-          extending?.end_at
-            ? `It is booked until ${dayTime(extending.end_at)}. If an admin approves, it is kept until ${dayTime(
-                plusOneDay(extending.end_at),
-              )}.`
-            : undefined
-        }
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setExtending(null)}>
-              Not now
-            </Button>
-            <Button
-              loading={extend.isPending}
-              disabled={extendReason.trim().length < 3}
-              onClick={() => extend.mutate()}
-            >
-              Ask an admin
-            </Button>
-          </>
-        }
-      >
-        <Field
-          label="Why is it needed?"
-          htmlFor="extend-reason"
-          required
-          hint="The admin reads this before deciding. Your manager is told you asked."
-        >
-          <Input
-            id="extend-reason"
-            value={extendReason}
-            maxLength={500}
-            onChange={(e) => setExtendReason(e.target.value)}
-            placeholder="Two more stores to audit tomorrow"
-          />
-        </Field>
-      </Modal>
+      {extending && (
+        <ExtendTripModal
+          key={extending.id}
+          request={extending}
+          me={me?.id}
+          onClose={() => setExtending(null)}
+          onExtended={() => {
+            setExtending(null);
+            refresh();
+          }}
+        />
+      )}
 
       <Modal
         open={cancelling !== null}

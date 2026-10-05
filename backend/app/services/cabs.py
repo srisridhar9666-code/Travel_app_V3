@@ -12,24 +12,20 @@ here rather than in the router, so every path obeys them the same way:
   manager copied, because a traveller standing on a kerb at 6 a.m. needs the
   plate and the driver's phone, not a booking reference. Recording the car
   moves nobody's status.
-* **One more day is asked for, not edited in.** Once an admin has acted the
-  request is locked (addendum A1), so a traveller whose work runs over asks an
-  admin to keep the cab another day. Approving moves `end_at` a day later, and
-  that is all conflict detection needs to see the longer booking. One ask at a
-  time; after a decision they may ask again for another day.
+* **A cab kept longer is a new, linked request** (`services/extensions.py`),
+  booked like any other, because the car and driver often change. What is
+  left here of the older "one more day" ask is its decision, so an ask made
+  before that change can still be answered.
 """
 from __future__ import annotations
 
 from datetime import timedelta
 
 from fastapi import HTTPException, status as http_status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import clock
-from app.config import get_settings
 from app.core.enums import (
-    ADMIN_ROLES,
     CAB_TYPE_LABELS,
     AuditAction,
     CabExtensionStatus,
@@ -38,9 +34,9 @@ from app.core.enums import (
 from app.models.base import naive_utcnow
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.user import User
-from app.schemas.request import CabBookingPayload
+from app.schemas.request import CabBookingPayload, CabCar
 from app.services import audit, decisions, invoices, notifications, vendors
-from app.services.requests import RIDING, extension_refusal, queued_emails, trip_summary
+from app.services.requests import RIDING, queued_emails
 
 #: The columns that describe the car sent, as the activity log names them.
 _SENT_FIELDS = ("booked_cab_type", "cab_vehicle_number", "cab_driver_name", "cab_driver_phone")
@@ -92,21 +88,6 @@ def _live(request: TravelRequest) -> None:
             status_code=http_status.HTTP_409_CONFLICT,
             detail="This request has been cancelled.",
         )
-
-
-def _admins(db: Session, request: TravelRequest, *, besides: User) -> list[User]:
-    return list(
-        db.execute(
-            select(User).where(
-                User.tenant_id == request.tenant_id,
-                User.role.in_(ADMIN_ROLES),
-                User.is_active.is_(True),
-                User.id != besides.id,
-            )
-        )
-        .scalars()
-        .all()
-    )
 
 
 def _tell_traveller(
@@ -186,76 +167,41 @@ def _record_vendor(
     return {"vendor": moved} if moved else {}
 
 
-def record_booking(
-    db: Session,
-    *,
-    request: TravelRequest,
-    admin: User,
-    payload: CabBookingPayload,
-    http_request=None,
-) -> list[int]:
-    """Record, or change, the car sent for a cab, and tell everyone riding.
-    When the admin names the cab operator, it is recorded as the vendor paid
-    for everyone riding - for the invoice, not for the travellers' eyes.
-
-    Saving the same details twice is a no-op - no log row, no second message.
-    The caller owns the commit and returns the queued email ids for sending
-    after the response.
-    """
+def set_car(request: TravelRequest, admin: User, car: CabCar) -> tuple[dict, bool]:
+    """Put the car on the request. Returns the change for the activity log
+    (empty when nothing moved) and whether this is the first car recorded."""
     _cab_only(request)
     _live(request)
-    if not riders(request):
-        raise HTTPException(
-            status_code=http_status.HTTP_409_CONFLICT,
-            detail="Approve someone on this cab first, then record the car that was sent.",
-        )
-
     before = {field: getattr(request, field) for field in _SENT_FIELDS}
     first = request.cab_vehicle_number is None
-    request.booked_cab_type = payload.booked_cab_type
-    request.cab_vehicle_number = payload.vehicle_number
-    request.cab_driver_name = payload.driver_name
-    request.cab_driver_phone = payload.driver_phone
-    car_changes = audit.diff(before, {field: getattr(request, field) for field in _SENT_FIELDS})
-    paid = _record_vendor(db, request=request, admin=admin, payload=payload)
-    if not car_changes and not paid:
-        return []
-
-    if car_changes:
+    request.booked_cab_type = car.booked_cab_type
+    request.cab_vehicle_number = car.vehicle_number
+    request.cab_driver_name = car.driver_name
+    request.cab_driver_phone = car.driver_phone
+    changes = audit.diff(before, {field: getattr(request, field) for field in _SENT_FIELDS})
+    if changes:
         request.cab_booked_by_id = admin.id
         request.cab_booked_at = naive_utcnow()
-        summary = (
-            f"{admin.full_name} {'recorded' if first else 'changed'} the cab for request "
-            f"{request.id}: {request.cab_sent_label}"
-        )
-    else:
-        summary = f"{admin.full_name} recorded who was paid for the cab on request {request.id}"
-    audit.record(
-        db,
-        action=AuditAction.UPDATE,
-        entity_type="travel_request",
-        entity_id=request.id,
-        summary=summary,
-        changes={**car_changes, **paid},
-        tenant_id=request.tenant_id,
-        actor=admin,
-        request=http_request,
-    )
-    db.flush()
-    queued = (
-        invoices.follow_costs(db, riders(request), actor=admin, http_request=http_request)
-        if paid
-        else []
-    )
-    # Who was paid is the admins' business; the travellers hear only about the car.
-    if not payload.notify or not car_changes:
-        return queued
+    return changes, first
 
+
+def car_summary(request: TravelRequest, admin: User, *, first: bool) -> str:
+    return (
+        f"{admin.full_name} {'recorded' if first else 'changed'} the cab for request "
+        f"{request.id}: {request.cab_sent_label}"
+    )
+
+
+def tell_riders(
+    db: Session, *, request: TravelRequest, people: list[User], first: bool
+) -> list[int]:
+    """Tell these riders about the car - its plate and driver - each with
+    their manager on the email's Cc line. Returns the queued email ids."""
     where = request.route_label(" to ")
     car = CAB_TYPE_LABELS[request.booked_cab_type]
     headline = "Your cab is arranged" if first else "Your cab has changed"
-    for traveller in riders(request):
-        person = traveller.user
+    queued: list[int] = []
+    for person in people:
         short = (
             f"{headline}: {car} {request.cab_vehicle_number}. Driver {request.cab_driver_name}, "
             f"{request.cab_driver_phone}. Pickup {_when(request)}."
@@ -282,108 +228,67 @@ def record_booking(
     return queued
 
 
-# ---------------------------------------------------------------------------
-# One more day
-# ---------------------------------------------------------------------------
-
-
-def ask_extension(
+def record_booking(
     db: Session,
     *,
     request: TravelRequest,
-    asker: User,
-    reason: str,
+    admin: User,
+    payload: CabBookingPayload,
     http_request=None,
 ) -> list[int]:
-    """Ask for the cab one more day. Admins are told in app and by email, and
-    the requester's manager in app; nothing about the booking changes until an
-    admin approves."""
-    refusal = extension_refusal(request, asker)
-    if refusal is not None:
-        code, detail = refusal
-        raise HTTPException(status_code=code, detail=detail)
+    """Record, or change, the car sent for a cab, and tell everyone riding.
+    When the admin names the cab operator, it is recorded as the vendor paid
+    for everyone riding - for the invoice, not for the travellers' eyes.
 
-    previous = request.cab_extension_status
-    request.cab_extension_status = CabExtensionStatus.PENDING
-    request.cab_extension_reason = reason
-    request.cab_extension_requested_by_id = asker.id
-    request.cab_extension_requested_at = naive_utcnow()
-    # The last answer belonged to the last ask; it stays in the activity log.
-    request.cab_extension_decided_by_id = None
-    request.cab_extension_decided_at = None
-    request.cab_extension_comment = None
+    Saving the same details twice is a no-op - no log row, no second message.
+    The caller owns the commit and returns the queued email ids for sending
+    after the response.
+    """
+    _cab_only(request)
+    _live(request)
+    if not riders(request):
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="Approve someone on this cab first, then record the car that was sent.",
+        )
 
+    car_changes, first = set_car(request, admin, payload)
+    paid = _record_vendor(db, request=request, admin=admin, payload=payload)
+    if not car_changes and not paid:
+        return []
+
+    if car_changes:
+        summary = car_summary(request, admin, first=first)
+    else:
+        summary = f"{admin.full_name} recorded who was paid for the cab on request {request.id}"
     audit.record(
         db,
-        action=AuditAction.SUBMIT,
+        action=AuditAction.UPDATE,
         entity_type="travel_request",
         entity_id=request.id,
-        summary=f"{asker.full_name} asked to extend cab request {request.id} by a day",
-        changes={
-            "cab_extension_status": {
-                "from": str(previous) if previous else None,
-                "to": str(CabExtensionStatus.PENDING),
-            },
-            "end_at": {
-                "from": request.end_at,
-                "to": request.end_at + timedelta(days=1),
-            },
-        },
-        reason=reason,
+        summary=summary,
+        changes={**car_changes, **paid},
         tenant_id=request.tenant_id,
-        actor=asker,
+        actor=admin,
         request=http_request,
     )
     db.flush()
+    queued = (
+        invoices.follow_costs(db, riders(request), actor=admin, http_request=http_request)
+        if paid
+        else []
+    )
+    # Who was paid is the admins' business; the travellers hear only about the car.
+    if not payload.notify or not car_changes:
+        return queued
+    return queued + tell_riders(
+        db, request=request, people=[t.user for t in riders(request)], first=first
+    )
 
-    summary = trip_summary(request)
-    link = f"{get_settings().frontend_base_url.rstrip('/')}/approvals"
-    title = f"{asker.full_name} asked to keep a cab one more day"
-    later = clock.time_label(request.end_at + timedelta(days=1))
-    queued: list[int] = []
-    for admin in _admins(db, request, besides=asker):
-        lines = [
-            f"Hello {admin.full_name.split()[0] if admin.full_name else 'there'},",
-            "",
-            f"{asker.full_name} asked to keep their cab one more day.",
-            "",
-            summary,
-            f"Booked until {_until(request)}; approving moves it to {later}.",
-            f"Their reason: {reason}",
-        ]
-        if request.cab_sent_label:
-            lines.append(f"Cab sent: {request.cab_sent_label}")
-        lines += ["", f"Approve or reject it on Approvals: {link}"]
-        queued += queued_emails(
-            notifications.notify(
-                db,
-                tenant_id=request.tenant_id,
-                user=admin,
-                kind="CAB_EXTENSION_REQUESTED",
-                title=title[:200],
-                body=f"{summary}. Until {later} if approved. Reason: {reason}",
-                request_id=request.id,
-                email_subject=f"Cab extension asked: {summary}"[:255],
-                email_body="\n".join(lines),
-                deliver_now=False,
-            )
-        )
 
-    # The requester's manager hears of it in app: it is their team's booking
-    # growing, but the decision is an admin's, so no email asks them to act.
-    manager = request.requester.active_manager if request.requester else None
-    if manager is not None and manager.id != asker.id:
-        notifications.notify(
-            db,
-            tenant_id=request.tenant_id,
-            user=manager,
-            kind="CAB_EXTENSION_REQUESTED",
-            title=title[:200],
-            body=f"{summary}. Until {later} if an admin approves. Reason: {reason}",
-            request_id=request.id,
-            send_email=False,
-        )
-    return queued
+# ---------------------------------------------------------------------------
+# One more day: the older ask, still decidable
+# ---------------------------------------------------------------------------
 
 
 def decide_extension(

@@ -31,7 +31,6 @@ from app.core.enums import (
     ACTIVE_TRAVELLER_STATUSES,
     ADMIN_ROLES,
     AuditAction,
-    CabExtensionStatus,
     CancellationStatus,
     NotificationChannel,
     NotificationStatus,
@@ -57,6 +56,7 @@ from app.schemas.request import (
     RequestBody,
     RequestRead,
     RevisionRead,
+    TicketFileRead,
     TravellerRead,
 )
 from app.services import audit, conflicts, costay, locations, notifications
@@ -198,44 +198,99 @@ def assert_editable(request: TravelRequest) -> None:
 RIDING = frozenset({TravellerStatus.APPROVED, TravellerStatus.BOOKED})
 
 
-def extension_refusal(request: TravelRequest, user: User | None) -> tuple[int, str] | None:
-    """Why this person may not ask to keep this cab one more day, or None if
-    they may.
+#: What can be carried on for more days: a cab kept longer, a stay made longer.
+#: A flight or train is a fixed journey - more travel is a new request.
+EXTENDABLE = frozenset({RequestType.LOCAL_CAB, RequestType.HOTEL})
 
-    The one statement of the rule: POST /cab-extension raises what it returns,
-    and the read model's `can_extend_cab` is "this returned None", so the
-    button is only offered when the ask would be accepted.
+#: An extension in one of these is over - turned down, withdrawn or let lapse -
+#: so the trip it would have carried on may be extended again.
+_DEAD = frozenset({RequestStatus.REJECTED, RequestStatus.CANCELLED, RequestStatus.EXPIRED})
+
+
+def live_extension(db: Session, request: TravelRequest) -> TravelRequest | None:
+    """The extension carrying this trip on: the newest one still alive."""
+    if request.id is None or request.request_type not in EXTENDABLE:
+        return None
+    rows = db.execute(
+        select(TravelRequest)
+        .where(
+            TravelRequest.extends_request_id == request.id,
+            TravelRequest.is_draft.is_(False),
+            TravelRequest.is_cancelled.is_(False),
+        )
+        .order_by(TravelRequest.id.desc())
+    ).scalars()
+    return next((row for row in rows if status_of(row) not in _DEAD), None)
+
+
+def extension_refusal(
+    db: Session,
+    request: TravelRequest,
+    user: User | None,
+    *,
+    live: TravelRequest | None | bool = False,
+) -> tuple[int, str] | None:
+    """Why this person may not extend this trip, or None if they may.
+
+    The one statement of the rule: POST /extend raises what it returns, and the
+    read model's `can_extend` is "this returned None", so the button is only
+    offered when the ask would be accepted. `live` is the trip's live
+    extension when the caller has already looked it up.
     """
-    if request.request_type is not RequestType.LOCAL_CAB:
-        return status.HTTP_400_BAD_REQUEST, "Only a cab can be extended by a day."
-    on_it = user is not None and (
-        request.requester_id == user.id or any(t.user_id == user.id for t in request.travellers)
+    if request.request_type not in EXTENDABLE:
+        return (
+            status.HTTP_400_BAD_REQUEST,
+            "Only a cab or a hotel stay can be extended. For more travel, raise a new request.",
+        )
+    mine = next(
+        (t for t in request.travellers if user is not None and t.user_id == user.id), None
     )
-    if not on_it:
-        return (
-            status.HTTP_403_FORBIDDEN,
-            "Only the person who raised this cab, or someone riding in it, can ask to extend it.",
-        )
-    if request.is_cancelled:
-        return status.HTTP_409_CONFLICT, "This request has been cancelled."
+    if mine is None:
+        return status.HTTP_403_FORBIDDEN, "Only someone on this trip can extend it."
+    if request.is_draft or request.is_cancelled:
+        return status.HTTP_409_CONFLICT, "This request is not live, so it cannot be extended."
     if request_is_editable(request):
-        # Until an admin acts, the requester can simply change the time.
+        # Until an admin acts, the requester can simply change the dates.
         return (
             status.HTTP_409_CONFLICT,
-            "Edit the request's end time instead - it has not been decided yet.",
+            "Nobody has decided this yet - change its dates instead of extending it.",
         )
-    if request.end_at is None:
+    if mine.status not in RIDING:
         return (
             status.HTTP_409_CONFLICT,
-            "This cab has no end time to extend. Raise a new cab request for the extra day.",
+            "You are not approved or booked on this trip, so it cannot be extended for you.",
         )
-    if not any(t.status in RIDING for t in request.travellers):
+    if request.request_type is RequestType.LOCAL_CAB and request.start_at is None:
+        return status.HTTP_409_CONFLICT, "This cab has no pickup time to carry on from."
+    if request.request_type is RequestType.HOTEL and request.check_in is None:
+        return status.HTTP_409_CONFLICT, "This stay has no check-in date to carry on from."
+    child = live_extension(db, request) if live is False else live
+    if child:
         return (
             status.HTTP_409_CONFLICT,
-            "Nobody on this cab is approved, so there is nothing to extend.",
+            f"This trip is already extended by request {child.id}. "
+            "Extend that one to go further.",
         )
-    if request.cab_extension_status is CabExtensionStatus.PENDING:
-        return status.HTTP_409_CONFLICT, "An extension is already waiting for an admin."
+    return None
+
+
+def booking_label(request: TravelRequest | None) -> str | None:
+    """How a trip was booked, in one line: the car and driver for a cab, the
+    hotel and its confirmation for a stay. None when nothing is booked yet."""
+    if request is None:
+        return None
+    if request.request_type is RequestType.LOCAL_CAB:
+        return request.cab_sent_label
+    for traveller in request.travellers:
+        if traveller.status is not TravellerStatus.BOOKED:
+            continue
+        details = traveller.booking_details or {}
+        place = ", ".join(
+            part for part in (details.get("hotel_name"), details.get("hotel_address")) if part
+        )
+        parts = [part for part in (place, traveller.booking_reference) if part]
+        if parts:
+            return " · confirmation ".join(parts) if place else f"Confirmation {parts[0]}"
     return None
 
 
@@ -475,6 +530,54 @@ def ticket_per_traveller(db: Session, request_id: int) -> dict[int, int]:
     return {traveller_id: ticket_id for traveller_id, (_, ticket_id) in chosen.items()}
 
 
+def ticket_files(
+    db: Session, request: TravelRequest, reader: User | None
+) -> dict[int, list[TicketFileRead]]:
+    """The files on each traveller's booking that this reader may open.
+
+    An admin sees every file not thrown away, booked ones first. Anyone else
+    sees only booked files, and only their own or - for whoever raised the
+    trip - their group's: the same people the download endpoint serves.
+    """
+    if reader is None or not request.travellers:
+        return {}
+    admin = reader.is_admin
+    allowed = {
+        t.id for t in request.travellers
+        if admin or reader.id in (t.user_id, request.requester_id)
+    }
+    if not allowed:
+        return {}
+    filters = [
+        TicketDocument.request_id == request.id,
+        TicketDocument.traveller_id.in_(allowed),
+        TicketDocument.file_path.is_not(None),
+        TicketDocument.status != TicketStatus.DISCARDED,
+    ]
+    if not admin:
+        filters.append(TicketDocument.status == TicketStatus.CONFIRMED)
+    rows = db.execute(
+        select(
+            TicketDocument.id, TicketDocument.traveller_id, TicketDocument.file_name,
+            TicketDocument.status,
+        )
+        .where(*filters)
+        .order_by(TicketDocument.id)
+    ).all()
+    out: dict[int, list[TicketFileRead]] = {}
+    for ticket_id, traveller_id, file_name, ticket_status in rows:
+        out.setdefault(traveller_id, []).append(
+            TicketFileRead(
+                id=ticket_id,
+                file_name=file_name,
+                confirmed=ticket_status is TicketStatus.CONFIRMED,
+            )
+        )
+    for files in out.values():
+        files.sort(key=lambda f: not f.confirmed)
+    return out
+
+
 def sees_review(reader: User | None, traveller: RequestTraveller) -> bool:
     """Whether this reader may see a manager's recommendation and comment.
 
@@ -511,6 +614,7 @@ def _traveller_read(
     billed: dict[int, Invoice],
     room_matches: dict[int, list[CoStayMatchRead]] | None = None,
     confirmed: set[int] | None = None,
+    files: dict[int, list[TicketFileRead]] | None = None,
 ) -> TravellerRead:
     manager = t.user.active_manager if t.user else None
     review = sees_review(reader, t)
@@ -535,6 +639,7 @@ def _traveller_read(
         booking_reference=t.booking_reference,
         booking_details=t.booking_details,
         ticket_id=tickets.get(t.id),
+        ticket_files=(files or {}).get(t.id, []),
         manager_id=manager.id if manager else None,
         manager_name=manager.full_name if manager else None,
         manager_recommendation=t.manager_recommendation if review else None,
@@ -601,13 +706,15 @@ def to_read(
         if reader is not None and reader.is_admin
         else {}
     )
+    files = ticket_files(db, request, reader)
     travellers = [
         _traveller_read(
             t, request, show_cost=show_cost, reader=reader, tickets=tickets, billed=billed,
-            room_matches=rooms, confirmed=confirmed,
+            room_matches=rooms, confirmed=confirmed, files=files,
         )
         for t in request.travellers
     ]
+    live = live_extension(db, request)
 
     read = RequestRead(
         id=request.id,
@@ -664,9 +771,12 @@ def to_read(
         cab_extension_decided_at=request.cab_extension_decided_at,
         cab_extension_comment=request.cab_extension_comment,
         cab_extended_days=request.cab_extended_days or 0,
-        can_extend_cab=(
-            request.request_type is RequestType.LOCAL_CAB
-            and extension_refusal(request, reader) is None
+        extends_request_id=request.extends_request_id,
+        previous_booking=booking_label(request.extends) if request.extends_request_id else None,
+        extended_by_request_id=live.id if live is not None else None,
+        can_extend=(
+            request.request_type in EXTENDABLE
+            and extension_refusal(db, request, reader, live=live) is None
         ),
         travel_reason=request.travel_reason,
         priority=request.priority or RequestPriority.MEDIUM,
@@ -832,6 +942,7 @@ def notify_admins_of_submission(
     # Only HIGH changes the subject and title: urgent mail should stand out in
     # an inbox, and marking every request would make the marker meaningless.
     urgent = priority is RequestPriority.HIGH
+    extending = request.extends if request.extends_request_id else None
 
     queued: list[int] = []
     for admin in admins:
@@ -839,11 +950,20 @@ def notify_admins_of_submission(
         lines = [
             f"Hello {greeting},",
             "",
-            f"{actor.full_name} raised a travel request that needs a decision.",
+            (
+                f"{actor.full_name} asked to extend request {extending.id}. It needs a decision."
+                if extending is not None
+                else f"{actor.full_name} raised a travel request that needs a decision."
+            ),
             "",
             summary,
             f"Travellers: {names}",
         ]
+        if extending is not None:
+            before = booking_label(extending)
+            lines.append(
+                f"Booked before as: {before}" if before else "The trip it extends is not booked yet."
+            )
         if campaign:
             lines.append(f"Campaign: {campaign}")
         if request.travel_reason:
@@ -857,14 +977,19 @@ def notify_admins_of_submission(
             user=admin,
             kind="REQUEST_SUBMITTED",
             title=(
-                f"High-priority request from {actor.full_name}"
+                ("High priority: " if urgent else "")
+                + f"{actor.full_name} asked to extend request {extending.id}"
+                if extending is not None
+                else f"High-priority request from {actor.full_name}"
                 if urgent
                 else f"New request from {actor.full_name}"
             ),
             body=f"{summary} - for {names}. Priority: {label}.",
             request_id=request.id,
             email_subject=(
-                ("High priority - " if urgent else "") + f"New travel request: {summary}"
+                ("High priority - " if urgent else "")
+                + ("Extension asked: " if extending is not None else "New travel request: ")
+                + summary
             )[:255],
             email_body="\n".join(lines),
             deliver_now=False,
@@ -938,6 +1063,9 @@ def notify_managers_of_submission(
                 f"{actor.full_name} changed a travel request for your team, so your earlier "
                 "recommendation was cleared. Please look at it again."
                 if edited
+                else f"{actor.full_name} asked to extend request {request.extends_request_id} "
+                "for your team."
+                if request.extends_request_id
                 else f"{actor.full_name} raised a travel request for your team."
             ),
             "",
