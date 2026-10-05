@@ -17,7 +17,7 @@ import csv
 import io
 import re
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, select
@@ -40,6 +40,7 @@ from app.schemas.invoice import (
     InvoiceEvent,
     InvoiceLineRead,
     InvoiceList,
+    InvoicePayment,
     InvoiceRead,
     InvoiceRejection,
     InvoiceSummary,
@@ -87,6 +88,8 @@ def _summary(invoice: Invoice, line_count: int) -> InvoiceSummary:
         created_at=invoice.created_at,
         submitted_at=invoice.submitted_at,
         decided_at=invoice.decided_at,
+        paid_on=invoice.paid_on,
+        payment_reference=invoice.payment_reference,
     )
 
 
@@ -152,6 +155,8 @@ def _read(db: Session, invoice: Invoice, viewer: User) -> InvoiceRead:
         submitted_by_name=_name(invoice.submitted_by),
         decided_by_name=_name(invoice.decided_by),
         decision_comment=invoice.decision_comment,
+        paid_by_name=_name(invoice.paid_by),
+        paid_at=invoice.paid_at,
         lines=[_line_read(line, found.get(line.id)) for line in invoice.lines],
         history=_history(db, invoice),
         can_edit=editor and open_,
@@ -164,6 +169,9 @@ def _read(db: Session, invoice: Invoice, viewer: User) -> InvoiceRead:
             viewer.role is Role.SUPER_ADMIN
             and invoice.status is InvoiceStatus.SUBMITTED
             and not svc.prepared_by(db, invoice, viewer)
+        ),
+        can_record_payment=(
+            viewer.role is Role.SUPER_ADMIN and invoice.status is InvoiceStatus.APPROVED
         ),
     )
 
@@ -203,16 +211,26 @@ def list_invoices(
     db: DbSession,
     invoice_status: Annotated[InvoiceStatus | None, Query(alias="status")] = None,
     vendor_id: Annotated[int | None, Query()] = None,
+    payment: Annotated[
+        Literal["paid", "unpaid"] | None,
+        Query(description="Approved invoices that are paid, or still to be paid"),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> InvoiceList:
     """Newest first. `counts` is per status for the vendor filter, whatever the
-    status filter - the numbers on the tabs."""
+    status filter - the numbers on the tabs - and `payment_counts` splits the
+    approved ones into paid and still to be paid."""
     scope = [Invoice.tenant_id == actor.tenant_id]
     if vendor_id is not None:
         scope.append(Invoice.vendor_id == vendor_id)
     filters = list(scope)
     if invoice_status is not None:
         filters.append(Invoice.status == invoice_status)
+    if payment is not None:
+        filters.append(Invoice.status == InvoiceStatus.APPROVED)
+        filters.append(
+            Invoice.paid_on.is_not(None) if payment == "paid" else Invoice.paid_on.is_(None)
+        )
 
     rows = list(
         db.execute(
@@ -242,9 +260,15 @@ def list_invoices(
         ).all()
     )
     counts = {s.value: by_status.get(s, 0) for s in InvoiceStatus}
+    paid = db.execute(
+        select(func.count(Invoice.id)).where(
+            *scope, Invoice.status == InvoiceStatus.APPROVED, Invoice.paid_on.is_not(None)
+        )
+    ).scalar_one()
     return InvoiceList(
         items=[_summary(r, line_counts.get(r.id, 0)) for r in rows],
         counts=counts,
+        payment_counts={"paid": paid, "unpaid": counts[InvoiceStatus.APPROVED.value] - paid},
         total=sum(counts.values()),
     )
 
@@ -707,6 +731,12 @@ def approve_invoice(
     the costs behind them locked; whoever prepared it is told."""
     invoice = _get(db, actor, invoice_id)
     _decidable(db, invoice, actor)
+    if payload.paid and payload.paid_on is not None and payload.paid_on > clock.local_today():
+        # Checked before anything moves, so a bad date never half-approves.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="The payment date is in the future. Record it once it is paid.",
+        )
 
     moved = svc.refresh(invoice)
     if moved:
@@ -757,8 +787,66 @@ def approve_invoice(
         actor=actor,
         request=http_request,
     )
+    if payload.paid:
+        _record_paid(db, invoice, actor, payload.paid_on, payload.payment_reference, http_request)
     queued = svc.tell_preparers(db, invoice, actor)
     _done(db, background, queued)
+    db.refresh(invoice)
+    return _read(db, invoice, actor)
+
+
+def _record_paid(
+    db: Session,
+    invoice: Invoice,
+    actor: User,
+    paid_on: date | None,
+    reference: str | None,
+    http_request: Request,
+) -> None:
+    changes = svc.mark_paid(invoice, actor, paid_on=paid_on, reference=reference)
+    audit.record(
+        db,
+        action=AuditAction.UPDATE,
+        entity_type="invoice",
+        entity_id=invoice.id,
+        summary=f"{actor.full_name} marked {invoice.number} {svc.payment_phrase(invoice)}",
+        changes=changes,
+        tenant_id=actor.tenant_id,
+        actor=actor,
+        request=http_request,
+    )
+
+
+@router.post("/{invoice_id}/payment", response_model=InvoiceRead)
+def record_payment(
+    invoice_id: int,
+    payload: InvoicePayment,
+    actor: SuperAdminUser,
+    http_request: Request,
+    db: DbSession,
+) -> InvoiceRead:
+    """Mark an approved invoice paid - the day the money went and the bank's
+    reference - or, correcting a mistake, not paid after all (with a reason).
+    Super admins only, like the approval. The preparers are told in the app."""
+    invoice = _get(db, actor, invoice_id)
+    if payload.paid:
+        _record_paid(db, invoice, actor, payload.paid_on, payload.payment_reference, http_request)
+    else:
+        changes = svc.mark_unpaid(invoice)
+        audit.record(
+            db,
+            action=AuditAction.UPDATE,
+            entity_type="invoice",
+            entity_id=invoice.id,
+            summary=f"{actor.full_name} marked {invoice.number} as not paid after all",
+            changes=changes,
+            reason=payload.comment,
+            tenant_id=actor.tenant_id,
+            actor=actor,
+            request=http_request,
+        )
+    svc.tell_preparers_of_payment(db, invoice, actor)
+    db.commit()
     db.refresh(invoice)
     return _read(db, invoice, actor)
 
@@ -831,6 +919,9 @@ def _csv(invoice: Invoice) -> str:
         ("Total", f"{invoice.total_amount:.2f}"),
         ("Prepared by", _name(invoice.created_by) or ""),
     ]
+    payment = svc.payment_label(invoice)
+    if payment:
+        header.append(("Payment", payment))
     if invoice.decision_comment:
         header.append(("Comment", invoice.decision_comment))
     if invoice.notes:

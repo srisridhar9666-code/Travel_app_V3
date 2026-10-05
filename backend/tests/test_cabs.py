@@ -35,6 +35,7 @@ from app.core.security import create_access_token
 from app.database import get_db
 from app.main import app
 from app.models.audit import AuditLog
+from app.models.base import naive_utcnow
 from app.models.project import Project
 from app.models.request import Notification, TravelRequest
 from app.models.user import User
@@ -162,9 +163,19 @@ def record_cab(client, org, request_id, who="admin", **overrides):
                       json={**CAR, **overrides})
 
 
-def ask(client, org, request_id, who="ravi", reason="Audit runs into a second day"):
-    return client.post(f"/requests/{request_id}/cab-extension", headers=auth(org[who]),
-                       json={"reason": reason})
+def ask(db, org, request_id, who="ravi", reason="Audit runs into a second day"):
+    """An ask made with the older "one more day" button. Extending is a linked
+    request now (test_extensions.py), but an ask made before that is still
+    answered from Approvals - so it is planted as it was stored."""
+    row = db.get(TravelRequest, request_id)
+    row.cab_extension_status = CabExtensionStatus.PENDING
+    row.cab_extension_reason = reason
+    row.cab_extension_requested_by_id = org[who].id
+    row.cab_extension_requested_at = naive_utcnow()
+    row.cab_extension_decided_by_id = None
+    row.cab_extension_decided_at = None
+    row.cab_extension_comment = None
+    db.commit()
 
 
 def answer(client, org, request_id, approve=True, comment=None, who="admin"):
@@ -263,7 +274,7 @@ class TestRaisingAndEditingACab:
             "SUV", "OUTSTATION", 560,
         )
         assert made["booked_cab_type"] is None and made["cab_extended_days"] == 0
-        assert made["cab_extension_status"] is None and made["can_extend_cab"] is False
+        assert made["cab_extension_status"] is None and made["can_extend"] is False
 
         told = notices(db, "REQUEST_SUBMITTED")
         assert told and "Ertiga (7 seats), outstation, about 560 km" in told[0].body
@@ -319,7 +330,7 @@ class TestRaisingAndEditingACab:
 
 class TestWhoMayRecordTheCab:
     @pytest.mark.parametrize("who", ["ravi", "lead"])
-    def test_only_an_admin(self, client, org, who):
+    def test_only_an_admin(self, client, db, org, who):
         made = approved_cab(client, org)
         assert record_cab(client, org, made["id"], who=who).status_code == 403
 
@@ -477,108 +488,18 @@ class TestRecordingTheCab:
 # ---------------------------------------------------------------------------
 
 
-class TestWhoMayAskForAnotherDay:
-    def test_not_before_an_admin_has_acted(self, client, org):
-        made = raise_cab(client, org)
-        assert made["can_extend_cab"] is False
-        r = ask(client, org, made["id"])
-        assert r.status_code == 409
-        assert r.json()["detail"] == (
-            "Edit the request's end time instead - it has not been decided yet."
-        )
-
-    def test_the_requester_or_a_traveller_on_it(self, client, org):
-        made = approved_cab(client, org, who="ravi", travellers=("ravi", "sana"))
-        got = client.get(f"/requests/{made['id']}", headers=auth(org["sana"])).json()
-        assert got["can_extend_cab"] is True
-        assert ask(client, org, made["id"], who="sana").status_code == 200
-
-    @pytest.mark.parametrize("who,code", [("admin", 403), ("lead", 403), ("meena", 404)])
-    def test_nobody_else(self, client, org, who, code):
+class TestOlderAsksStillWaiting:
+    def test_the_old_ask_endpoint_is_gone(self, client, org):
         made = approved_cab(client, org)
-        got = client.get(f"/requests/{made['id']}", headers=auth(org["admin"])).json()
-        assert got["can_extend_cab"] is False
-        assert ask(client, org, made["id"], who=who).status_code == code
+        r = client.post(f"/requests/{made['id']}/cab-extension", headers=auth(org["ravi"]),
+                        json={"reason": "Audit runs into a second day"})
+        assert r.status_code in (404, 405)
 
-    def test_only_a_cab(self, client, org):
-        r = client.post("/requests", headers=auth(org["ravi"]), json=cab_body(
-            org, request_type="HOTEL", hotel_city="Tirupati", hotel_state="Andhra Pradesh",
-            check_in=str(DAY), check_out=str(DAY + timedelta(days=1)),
-        ))
-        hotel = r.json()
-        decide(client, org, hotel["id"], hotel["travellers"][0]["id"])
-        r = ask(client, org, hotel["id"])
-        assert r.status_code == 400
-        assert "Only a cab" in r.json()["detail"]
-
-    def test_only_with_someone_approved(self, client, org):
-        made = raise_cab(client, org)
-        decide(client, org, made["id"], made["travellers"][0]["id"], to="REJECTED",
-               reason="Not this week")
-        r = ask(client, org, made["id"])
-        assert r.status_code == 409
-        assert "Nobody on this cab is approved" in r.json()["detail"]
-
-    def test_only_with_an_end_time(self, client, org):
-        made = approved_cab(client, org, end_at=None)
-        r = ask(client, org, made["id"])
-        assert r.status_code == 409
-        assert "no end time" in r.json()["detail"]
-
-    def test_not_on_a_cancelled_request(self, client, org):
-        made = approved_cab(client, org)
-        client.post(f"/requests/{made['id']}/cancel", headers=auth(org["admin"]),
-                    json={"reason": "Audit moved"})
-        assert ask(client, org, made["id"]).status_code == 409
-
-    @pytest.mark.parametrize("reason", ["", "  a ", "x" * 501])
-    def test_a_reason_is_required(self, client, org, reason):
-        made = approved_cab(client, org)
-        assert ask(client, org, made["id"], reason=reason).status_code == 422
-
-    def test_one_ask_at_a_time(self, client, org):
-        made = approved_cab(client, org)
-        assert ask(client, org, made["id"]).status_code == 200
-        r = ask(client, org, made["id"], who="ravi")
-        assert r.status_code == 409
-        assert r.json()["detail"] == "An extension is already waiting for an admin."
-
-
-class TestAskingForAnotherDay:
-    def test_it_waits_for_an_admin_and_changes_nothing_yet(self, client, db, org):
-        made = approved_cab(client, org)
-        r = ask(client, org, made["id"], reason="  Audit runs   into a second day ")
-        assert r.status_code == 200, r.text
-        got = r.json()
-        assert got["cab_extension_status"] == "PENDING"
-        assert got["cab_extension_reason"] == "Audit runs into a second day"
-        assert got["cab_extension_requested_by_name"] == "Ravi Kumar"
-        assert got["can_extend_cab"] is False
-        assert got["end_at"].startswith(END.isoformat())
-        assert got["cab_extended_days"] == 0
-
-        entry = log(db, made["id"], "SUBMIT")[-1]
-        assert entry.summary == f"Ravi Kumar asked to extend cab request {made['id']} by a day"
-        assert entry.reason == "Audit runs into a second day"
-
-    def test_the_admins_are_told_and_the_manager_in_app(self, client, db, org):
-        made = approved_cab(client, org)
-        ask(client, org, made["id"])
-        told = notices(db, "CAB_EXTENSION_REQUESTED")
-        assert {n.user_id for n in told} == {org["owner"].id, org["admin"].id, org["lead"].id}
-        assert "Reason: Audit runs into a second day" in told[0].body
-
-        mail = notices(db, "CAB_EXTENSION_REQUESTED", channel=NotificationChannel.EMAIL)
-        assert {m.to_address for m in mail} == {"sridhar@designboxed.com", "priya@designboxed.com"}
-        assert mail[0].body.rstrip().endswith("/approvals")
-        assert notices(db, "CAB_EXTENSION_REQUESTED", user=org["lead"],
-                       channel=NotificationChannel.EMAIL) == []
-
-    def test_the_queue_counts_and_lists_it(self, client, org):
+    def test_the_queue_counts_and_lists_them(self, client, db, org):
         made = approved_cab(client, org)
         mine = approved_cab(client, org, who="meena", travellers=("meena",))
-        ask(client, org, made["id"])
-        ask(client, org, mine["id"], who="meena")
+        ask(db, org, made["id"])
+        ask(db, org, mine["id"], who="meena")
 
         assert counts(client, org)["cab_extensions"] == 2
         assert counts(client, org, who="lead")["cab_extensions"] == 1
@@ -598,9 +519,9 @@ class TestAskingForAnotherDay:
 
 class TestDecidingAnotherDay:
     @pytest.mark.parametrize("who", ["ravi", "lead"])
-    def test_only_an_admin(self, client, org, who):
+    def test_only_an_admin(self, client, db, org, who):
         made = approved_cab(client, org)
-        ask(client, org, made["id"])
+        ask(db, org, made["id"])
         assert answer(client, org, made["id"], who=who).status_code == 403
 
     def test_only_when_one_is_waiting(self, client, org):
@@ -610,15 +531,15 @@ class TestDecidingAnotherDay:
         assert "no extension waiting" in r.json()["detail"]
 
     @pytest.mark.parametrize("comment", [None, "", "  n "])
-    def test_a_rejection_needs_a_comment(self, client, org, comment):
+    def test_a_rejection_needs_a_comment(self, client, db, org, comment):
         made = approved_cab(client, org)
-        ask(client, org, made["id"])
+        ask(db, org, made["id"])
         assert answer(client, org, made["id"], approve=False, comment=comment).status_code == 422
 
     def test_approving_keeps_the_cab_a_day_longer(self, client, db, org):
         made = approved_cab(client, org)
         record_cab(client, org, made["id"])
-        ask(client, org, made["id"])
+        ask(db, org, made["id"])
         r = answer(client, org, made["id"], comment="Fine, vendor agreed")
         assert r.status_code == 200, r.text
         got = r.json()
@@ -637,7 +558,7 @@ class TestDecidingAnotherDay:
     def test_the_travellers_are_told_with_their_manager_copied(self, client, db, org):
         made = approved_cab(client, org)
         record_cab(client, org, made["id"])
-        ask(client, org, made["id"])
+        ask(db, org, made["id"])
         answer(client, org, made["id"])
 
         told = notices(db, "CAB_EXTENSION_APPROVED", user=org["ravi"])
@@ -651,7 +572,7 @@ class TestDecidingAnotherDay:
 
     def test_rejecting_leaves_the_booking_alone(self, client, db, org):
         made = approved_cab(client, org)
-        ask(client, org, made["id"])
+        ask(db, org, made["id"])
         r = answer(client, org, made["id"], approve=False, comment="Vendor has no car free")
         assert r.status_code == 200, r.text
         got = r.json()
@@ -665,14 +586,12 @@ class TestDecidingAnotherDay:
 
     def test_after_a_decision_they_may_ask_for_another_day(self, client, db, org):
         made = approved_cab(client, org)
-        ask(client, org, made["id"])
+        ask(db, org, made["id"])
         answer(client, org, made["id"], approve=False, comment="Not today")
-        got = client.get(f"/requests/{made['id']}", headers=auth(org["ravi"])).json()
-        assert got["can_extend_cab"] is True
 
-        assert ask(client, org, made["id"]).status_code == 200
+        ask(db, org, made["id"])
         answer(client, org, made["id"])
-        assert ask(client, org, made["id"], reason="Still more stores").status_code == 200
+        ask(db, org, made["id"], reason="Still more stores")
         got = answer(client, org, made["id"]).json()
         assert got["cab_extended_days"] == 2
         assert got["end_at"].startswith((END + timedelta(days=2)).isoformat())
@@ -681,20 +600,20 @@ class TestDecidingAnotherDay:
 
     def test_whoever_asked_hears_the_answer(self, client, db, org):
         made = approved_cab(client, org, travellers=("ravi", "sana"))
-        ask(client, org, made["id"], who="sana")
+        ask(db, org, made["id"], who="sana")
         answer(client, org, made["id"])
         assert {n.user_id for n in notices(db, "CAB_EXTENSION_APPROVED")} == {
             org["ravi"].id, org["sana"].id,
         }
 
-    def test_a_cancelled_cab_cannot_be_extended(self, client, org):
+    def test_a_cancelled_cab_cannot_be_extended(self, client, db, org):
         made = approved_cab(client, org)
-        ask(client, org, made["id"])
+        ask(db, org, made["id"])
         client.post(f"/requests/{made['id']}/cancel", headers=auth(org["admin"]),
                     json={"reason": "Audit moved"})
         assert answer(client, org, made["id"]).status_code == 409
 
-    def test_the_longer_booking_takes_part_in_conflict_detection(self, client, org):
+    def test_the_longer_booking_takes_part_in_conflict_detection(self, client, db, org):
         made = approved_cab(client, org)
         next_day = START + timedelta(days=1, hours=4)
         later = dict(
@@ -707,7 +626,7 @@ class TestDecidingAnotherDay:
         clashes = client.post("/requests/check", headers=auth(org["ravi"]), json=check).json()
         assert clashes["conflicts"] == []
 
-        ask(client, org, made["id"])
+        ask(db, org, made["id"])
         answer(client, org, made["id"])
         clashes = client.post("/requests/check", headers=auth(org["ravi"]), json=check).json()
         assert [c["other_request_id"] for c in clashes["conflicts"]] == [made["id"]]
@@ -716,7 +635,7 @@ class TestDecidingAnotherDay:
 def test_the_traveller_status_is_untouched_by_the_cab_flow(client, db, org):
     made = approved_cab(client, org)
     record_cab(client, org, made["id"])
-    ask(client, org, made["id"])
+    ask(db, org, made["id"])
     answer(client, org, made["id"])
     row = db.get(TravelRequest, made["id"])
     assert [t.status for t in row.travellers] == [TravellerStatus.APPROVED]

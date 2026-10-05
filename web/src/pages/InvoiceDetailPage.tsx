@@ -17,10 +17,12 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { formatMoney } from '@/components/charts';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { PaymentBadge, PaymentFields } from '@/components/InvoicePayment';
 import { Modal } from '@/components/Modal';
 import { Badge, Button, Card, CardHeader, EmptyState, Field, Skeleton } from '@/components/ui';
 import {
   approveInvoice,
+  recordInvoicePayment,
   deleteInvoice,
   downloadInvoiceCsv,
   errorMessage,
@@ -29,7 +31,7 @@ import {
   submitInvoice,
 } from '@/lib/api';
 import { INVOICE_EVENT_LABELS, dayLabel, periodText } from '@/lib/invoices';
-import { formatInstant } from '@/lib/time';
+import { formatInstant, todayInIndia } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
 import {
@@ -87,6 +89,12 @@ function Detail({ invoice }: { invoice: Invoice }) {
   const [deciding, setDeciding] = useState<'approve' | 'reject' | null>(null);
   const [comment, setComment] = useState('');
   const [removing, setRemoving] = useState(false);
+  // Approving can record the payment in the same step; or it is recorded later.
+  const today = todayInIndia();
+  const [paidNow, setPaidNow] = useState(false);
+  const [paidOn, setPaidOn] = useState(today);
+  const [paymentRef, setPaymentRef] = useState('');
+  const [paying, setPaying] = useState<'paid' | 'unpaid' | null>(null);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['invoices'] });
   const problems = invoice.lines.filter((line) => line.problem);
@@ -106,13 +114,18 @@ function Detail({ invoice }: { invoice: Invoice }) {
         ? approveInvoice(invoice.id, {
             comment: comment.trim() || null,
             expected_total: invoice.total_amount,
+            ...(paidNow
+              ? { paid: true, paid_on: paidOn, payment_reference: paymentRef.trim() || null }
+              : {}),
           })
         : rejectInvoice(invoice.id, comment.trim()),
     meta: { errorFallback: 'Could not save the decision.' },
     onSuccess: (saved, approve) => {
       toast.success(
         approve
-          ? `${saved.number} approved — whoever prepared it is told`
+          ? saved.paid_on
+            ? `${saved.number} approved and marked paid — whoever prepared it is told`
+            : `${saved.number} approved, still to be paid — mark it paid once it is`
           : `${saved.number} rejected — the admins are told what to fix`,
       );
       setDeciding(null);
@@ -123,6 +136,30 @@ function Detail({ invoice }: { invoice: Invoice }) {
     // show the new figures rather than the old ones.
     onError: () => refresh(),
   });
+
+  const pay = useMutation({
+    mutationFn: (paid: boolean) =>
+      recordInvoicePayment(invoice.id, {
+        paid,
+        ...(paid
+          ? { paid_on: paidOn, payment_reference: paymentRef.trim() || null }
+          : { comment: comment.trim() }),
+      }),
+    meta: { errorFallback: 'Could not record the payment.' },
+    onSuccess: (saved) => {
+      toast.success(saved.paid_on ? `${saved.number} marked paid` : `${saved.number} marked not paid`);
+      setPaying(null);
+      setComment('');
+      refresh();
+    },
+  });
+
+  const openPayment = (next: 'paid' | 'unpaid') => {
+    setPaidOn(today);
+    setPaymentRef('');
+    setComment('');
+    setPaying(next);
+  };
 
   const remove = useMutation({
     mutationFn: () => deleteInvoice(invoice.id),
@@ -164,15 +201,29 @@ function Detail({ invoice }: { invoice: Invoice }) {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="font-mono text-2xl font-semibold tracking-tight sm:text-3xl">{invoice.number}</h1>
             <Badge tone={INVOICE_STATUS_TONES[invoice.status]}>{INVOICE_STATUS_LABELS[invoice.status]}</Badge>
+            <PaymentBadge invoice={invoice} />
           </div>
           <p className="mt-1.5 text-sm text-text-muted">
             {invoice.vendor_name} · {periodText(invoice.period_start, invoice.period_end)}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {invoice.can_record_payment && !invoice.paid_on && (
+            <Button onClick={() => openPayment('paid')}>
+              <Check size={14} />
+              Mark as paid
+            </Button>
+          )}
           {invoice.can_decide && (
             <>
-              <Button onClick={() => setDeciding('approve')}>
+              <Button
+                onClick={() => {
+                  setPaidNow(false);
+                  setPaidOn(today);
+                  setPaymentRef('');
+                  setDeciding('approve');
+                }}
+              >
                 <Check size={14} />
                 Approve
               </Button>
@@ -215,7 +266,11 @@ function Detail({ invoice }: { invoice: Invoice }) {
         </div>
       </div>
 
-      <StatusNote invoice={invoice} role={role} />
+      <StatusNote
+        invoice={invoice}
+        role={role}
+        onUnpaid={invoice.can_record_payment && invoice.paid_on ? () => openPayment('unpaid') : undefined}
+      />
 
       {problems.length > 0 && (
         <div className="rounded-lg bg-danger-soft px-4 py-3 text-sm">
@@ -357,7 +412,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
         title={deciding === 'approve' ? `Approve ${invoice.number}` : `Reject ${invoice.number}`}
         description={
           deciding === 'approve'
-            ? `${formatMoney(invoice.total_amount, true)} to ${invoice.vendor_name} for ${invoice.line_count} ${invoice.line_count === 1 ? 'trip' : 'trips'}. Once approved it cannot change, and the costs on it are locked.`
+            ? `${formatMoney(invoice.total_amount, true)} to ${invoice.vendor_name} for ${invoice.line_count} ${invoice.line_count === 1 ? 'trip' : 'trips'}. Once approved it cannot change, and the costs on it are locked. Paying it is a separate step - now, or later.`
             : 'It goes back to the admins to fix and submit again. They are shown your comment.'
         }
         footer={
@@ -366,9 +421,13 @@ function Detail({ invoice }: { invoice: Invoice }) {
               Cancel
             </Button>
             {deciding === 'approve' ? (
-              <Button loading={decide.isPending} onClick={() => decide.mutate(true)}>
+              <Button
+                loading={decide.isPending}
+                disabled={paidNow && paidOn > today}
+                onClick={() => decide.mutate(true)}
+              >
                 <Check size={14} />
-                Approve invoice
+                {paidNow ? 'Approve and mark paid' : 'Approve, not paid yet'}
               </Button>
             ) : (
               <Button
@@ -384,6 +443,42 @@ function Detail({ invoice }: { invoice: Invoice }) {
           </>
         }
       >
+        {deciding === 'approve' && (
+          <div className="mb-4 space-y-3">
+            <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Payment">
+              {[
+                { value: false, title: 'Approved, not paid yet', hint: 'Mark it paid once the money goes.' },
+                { value: true, title: 'Approved and paid', hint: 'The money has already gone.' },
+              ].map((choice) => (
+                <button
+                  key={String(choice.value)}
+                  type="button"
+                  role="radio"
+                  aria-checked={paidNow === choice.value}
+                  onClick={() => setPaidNow(choice.value)}
+                  className={cn(
+                    'rounded-md border px-3 py-2.5 text-left transition-colors',
+                    paidNow === choice.value
+                      ? 'border-primary bg-surface-sunken'
+                      : 'border-border hover:border-border-strong',
+                  )}
+                >
+                  <span className="block text-sm font-medium">{choice.title}</span>
+                  <span className="block text-2xs text-text-subtle">{choice.hint}</span>
+                </button>
+              ))}
+            </div>
+            {paidNow && (
+              <PaymentFields
+                paidOn={paidOn}
+                reference={paymentRef}
+                today={today}
+                onPaidOn={setPaidOn}
+                onReference={setPaymentRef}
+              />
+            )}
+          </div>
+        )}
         <Field
           label={deciding === 'approve' ? 'Comment' : 'What needs fixing'}
           htmlFor="invoice-comment"
@@ -406,6 +501,61 @@ function Detail({ invoice }: { invoice: Invoice }) {
             }
           />
         </Field>
+      </Modal>
+
+      <Modal
+        open={paying !== null}
+        onClose={() => setPaying(null)}
+        title={paying === 'paid' ? `Mark ${invoice.number} paid` : `${invoice.number} is not paid after all`}
+        description={
+          paying === 'paid'
+            ? `${formatMoney(invoice.total_amount, true)} to ${invoice.vendor_name}. Whoever prepared it is told.`
+            : 'For a payment recorded by mistake, or one the bank returned. The change and your reason are kept in the log.'
+        }
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setPaying(null)}>
+              Cancel
+            </Button>
+            {paying === 'paid' ? (
+              <Button loading={pay.isPending} disabled={paidOn > today} onClick={() => pay.mutate(true)}>
+                <Check size={14} />
+                Mark paid
+              </Button>
+            ) : (
+              <Button
+                variant="danger"
+                loading={pay.isPending}
+                disabled={comment.trim().length < 3}
+                onClick={() => pay.mutate(false)}
+              >
+                Mark not paid
+              </Button>
+            )}
+          </>
+        }
+      >
+        {paying === 'paid' ? (
+          <PaymentFields
+            paidOn={paidOn}
+            reference={paymentRef}
+            today={today}
+            onPaidOn={setPaidOn}
+            onReference={setPaymentRef}
+          />
+        ) : (
+          <Field label="Why?" htmlFor="unpaid-reason" required>
+            <textarea
+              id="unpaid-reason"
+              value={comment}
+              maxLength={500}
+              rows={3}
+              onChange={(e) => setComment(e.target.value)}
+              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-base text-text shadow-sm placeholder:text-text-subtle hover:border-border-strong focus:border-border-strong sm:text-sm"
+              placeholder="The bank returned the transfer"
+            />
+          </Field>
+        )}
       </Modal>
 
       <ConfirmDialog
@@ -450,15 +600,56 @@ function Fact({
 }
 
 /** What happens next, in the words of the person looking. */
-function StatusNote({ invoice, role }: { invoice: Invoice; role: string | undefined }) {
+function StatusNote({
+  invoice,
+  role,
+  onUnpaid,
+}: {
+  invoice: Invoice;
+  role: string | undefined;
+  /** A super admin correcting a payment recorded by mistake. */
+  onUnpaid?: () => void;
+}) {
   if (invoice.status === 'APPROVED') {
     return (
-      <div className="rounded-lg bg-success-soft px-4 py-3 text-sm">
-        <p className="font-medium text-success">
-          Approved by {invoice.decided_by_name ?? 'a super admin'}
-          {invoice.decided_at && ` on ${formatInstant(invoice.decided_at)}`}
-        </p>
-        {invoice.decision_comment && <p className="mt-0.5 text-text-muted">{invoice.decision_comment}</p>}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-lg bg-success-soft px-4 py-3 text-sm">
+          <p className="font-medium text-success">
+            Approved by {invoice.decided_by_name ?? 'a super admin'}
+            {invoice.decided_at && ` on ${formatInstant(invoice.decided_at)}`}
+          </p>
+          {invoice.decision_comment && <p className="mt-0.5 text-text-muted">{invoice.decision_comment}</p>}
+        </div>
+        {invoice.paid_on ? (
+          <div className="rounded-lg bg-success-soft px-4 py-3 text-sm">
+            <p className="font-medium text-success">
+              Paid on {dayLabel(invoice.paid_on)}
+              {invoice.payment_reference && ` · ${invoice.payment_reference}`}
+            </p>
+            <p className="mt-0.5 text-text-muted">
+              Recorded by {invoice.paid_by_name ?? 'a super admin'}
+              {invoice.paid_at && ` on ${formatInstant(invoice.paid_at)}`}.
+              {onUnpaid && (
+                <button
+                  type="button"
+                  onClick={onUnpaid}
+                  className="ml-1 text-xs underline underline-offset-2 hover:text-text"
+                >
+                  Not paid after all?
+                </button>
+              )}
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-lg bg-warning-soft px-4 py-3 text-sm">
+            <p className="font-medium text-warning">Not paid yet</p>
+            <p className="mt-0.5 text-text-muted">
+              {role === 'SUPER_ADMIN'
+                ? 'Use Mark as paid once the money has gone to the vendor.'
+                : 'A super admin marks it paid once the money has gone.'}
+            </p>
+          </div>
+        )}
       </div>
     );
   }

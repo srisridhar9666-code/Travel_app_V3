@@ -90,11 +90,25 @@ class Invoice(Base, TenantMixin, TimestampMixin):
     #: The super admin's word. Required on a rejection: it is what the admins fix.
     decision_comment: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # --- payment, after approval ---------------------------------------------
+    #: Approving says the bill is right; paying it is a separate, later act.
+    #: An approved invoice with no `paid_on` is approved but not yet paid. The
+    #: super admin records the day the money went and, usually, the bank's
+    #: reference for it, and can correct a mistaken one (logged with a reason).
+    paid_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    payment_reference: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    paid_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_invoices_paid_by"),
+        nullable=True,
+    )
+    paid_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
     vendor = relationship("Vendor", lazy="joined")
     created_by = relationship("User", foreign_keys=[created_by_id], lazy="joined")
     updated_by = relationship("User", foreign_keys=[updated_by_id], lazy="joined")
     submitted_by = relationship("User", foreign_keys=[submitted_by_id], lazy="joined")
     decided_by = relationship("User", foreign_keys=[decided_by_id], lazy="joined")
+    paid_by = relationship("User", foreign_keys=[paid_by_id], lazy="joined")
     lines: Mapped[list["InvoiceLine"]] = relationship(
         back_populates="invoice",
         cascade="all, delete-orphan",

@@ -98,3 +98,40 @@ export function revisionValue(field: string, value: unknown): string {
   }
   return String(value);
 }
+
+// --- wall-clock date arithmetic ---------------------------------------------
+//
+// Trip times are local as the requester typed them ("2026-10-06T09:00:00"), so
+// days are moved on the string's own calendar fields - never through a time
+// zone, which on a device set elsewhere would shift the day.
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** "2026-10-06" moved on by `days` calendar days. */
+export function addDays(date: string, days: number): string {
+  const moved = new Date(`${date.slice(0, 10)}T00:00:00Z`);
+  moved.setUTCDate(moved.getUTCDate() + days);
+  return moved.toISOString().slice(0, 10);
+}
+
+/** Whole calendar days from one date to another. */
+export function daysBetween(from: string, to: string): number {
+  return Math.round(
+    (Date.parse(`${to.slice(0, 10)}T00:00:00Z`) - Date.parse(`${from.slice(0, 10)}T00:00:00Z`)) /
+      DAY_MS,
+  );
+}
+
+/** The date and the "HH:mm" of a wall-clock time, as an input wants them. */
+export const datePart = (iso: string) => iso.slice(0, 10);
+export const timePart = (iso: string) => iso.slice(11, 16);
+
+/** "Sat, 06 Oct" for a plain date, read the same on any device. */
+export function dayLabel(date: string): string {
+  return new Date(`${date.slice(0, 10)}T00:00:00Z`).toLocaleDateString('en-IN', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    timeZone: 'UTC',
+  });
+}

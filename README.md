@@ -283,7 +283,7 @@ Roles are ranked, and nobody grants or changes the account of someone above them
 | Ground staff | Raise and track their own travel. Can report to one manager. |
 | Manager | See their team's people, trips and travel history - never costs. Ask an admin to add, edit or remove a member (**My team**). Create and edit campaigns, but not archive or delete them. |
 | Admin | Run the desk: approvals, bookings, costs, Team, Departments, and the activity log. Approve or reject managers' team changes, with a comment the manager is sent. Keep the **Vendors** list and create, edit, submit and delete vendor **Invoices**. |
-| Super admin | Everything an admin sees, plus purging old identity documents, and the only role that can manage super admins. The only role that **approves or rejects invoices** - and so the one admin tier that cannot create or edit invoices or vendors (they read and download both). The migration makes the earliest active system admin of each organisation the first one. |
+| Super admin | Everything an admin sees, plus purging old identity documents, and the only role that can manage super admins. The only role that **approves or rejects invoices**, and records whether an approved one is **paid** (on approval, or later) - and so the one admin tier that cannot create or edit invoices or vendors (they read and download both). The migration makes the earliest active system admin of each organisation the first one. |
 
 System admin used to sit between Admin and Super admin, differing from Admin only in
 data retention. It is no longer offered: migration `3c1e9a7b5d20` turns every remaining
@@ -487,6 +487,28 @@ no override: the override exists to justify going ahead anyway.
 the only definition of what may follow what, and booking requires a reference. There is no
 undo: every decided state leads only to `CANCELLED`, and correcting a decision goes through
 cancel-and-reraise, exactly like an edit after the lock.
+
+**Booking is one call, and one email.** `POST /requests/{id}/book` (`services/booking.py`)
+books one or more approved travellers together - the same reference, details and files, a
+cab's car, the cost (a total, split evenly) and the vendor - in one transaction, checked in
+full before anything moves. The travellers booked share **one** email: all of them on To,
+their managers on Cc, every file attached (`notifications.notify_group`). Each traveller gets
+their own confirmed copy of every file row, so My requests serves it to them under the
+unchanged rule "your own ticket". The admin screen is a popup (`BookingModal`), not the
+traveller's row.
+
+**An extension is a request of its own.** Extending a decided cab (more days) or stay (more
+nights) raises a new request linked by `extends_request_id` (`services/extensions.py`),
+decided and booked like any other - because the car, the driver or the room may change, and
+the extra days cost money that may go on a different invoice. It starts where the trip ended
+(a stay checks in on the old check-out day), one live extension per trip, and the booking
+popup offers "Use the same cab / hotel" from the trip it extends. The older in-place "one
+more day" ask is retired; asks already waiting can still be decided.
+
+**Approved is not paid.** An approved invoice carries `paid_on` and `payment_reference`;
+until a super admin records the payment it shows as *Not paid yet* (the list's "To pay" tab).
+Payment can be recorded with the approval or later, never with a date still to come, and
+taking it back needs a reason - all of it in the activity log.
 
 **A batch decision is one transaction.** `POST /requests/{id}/decide` takes several travellers
 at once — tick three, reject the fourth, press once. One bad decision rolls the whole set

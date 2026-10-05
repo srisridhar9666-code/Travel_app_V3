@@ -77,6 +77,19 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
     requester_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
 
+    #: Set when this request carries on a decided cab or stay for more days -
+    #: the cab kept another day, two more nights at the hotel. It is a request
+    #: of its own, decided and booked like any other, because the car, the
+    #: driver, the room and the cost may all differ from the trip it extends.
+    #: The link is what lets an admin book it "the same as before" in one tap.
+    extends_request_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "travel_requests.id", ondelete="SET NULL", name="fk_travel_requests_extends"
+        ),
+        nullable=True,
+        index=True,
+    )
+
     # A draft is visible only to its owner and never occupies anyone's calendar.
     # Submitting clears it.
     is_draft: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -220,6 +233,9 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
     cancellation_requested_by = relationship("User", foreign_keys=[cancellation_requested_by_id])
     cancellation_decided_by = relationship("User", foreign_keys=[cancellation_decided_by_id])
     cancelled_by = relationship("User", foreign_keys=[cancelled_by_id])
+    extends = relationship(
+        "TravelRequest", remote_side="TravelRequest.id", foreign_keys=[extends_request_id]
+    )
     travellers: Mapped[list["RequestTraveller"]] = relationship(
         back_populates="request",
         cascade="all, delete-orphan",
@@ -509,7 +525,9 @@ class Notification(Base):
     # --- delivery ------------------------------------------------------------
     #: Resolved when the row is written, not when it is sent, so the ledger
     #: records where it was meant to go even if the account changes later.
-    to_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: Comma separated when one message went to several people at once - the
+    #: travellers booked together on one cab, say. The first is whose row it is.
+    to_address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     #: Who else the email was copied to, comma separated - a traveller's manager
     #: on a decision. Resolved when the row is written, like `to_address`.
     cc_addresses: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -519,6 +537,11 @@ class Notification(Base):
     attachment_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     attachment_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     attachment_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    #: Further files sent with the email, when there is more than one - a
+    #: return ticket beside the outward one, a hotel voucher and its invoice.
+    #: Each is {"path", "name", "type"}, read from storage when the message
+    #: goes, like the single attachment above.
+    attachments: Mapped[list | None] = mapped_column(JSON, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     #: Why it did not go. Truncated: an SMTP refusal can be paragraphs long.

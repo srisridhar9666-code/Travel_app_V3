@@ -410,6 +410,8 @@ NOTIFICATION_CATEGORIES: dict[str, NotificationCategory] = {
     "INVOICE_CHANGED": NotificationCategory.NEW_REQUESTS,
     "INVOICE_APPROVED": NotificationCategory.DECISIONS,
     "INVOICE_REJECTED": NotificationCategory.DECISIONS,
+    # Paid, or a payment taken back: the preparers' in-app notice.
+    "INVOICE_PAID": NotificationCategory.DECISIONS,
 }
 
 

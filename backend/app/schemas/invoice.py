@@ -103,15 +103,48 @@ class InvoiceDecision(BaseModel):
     the travellers' costs until approval, so a cost changed while the page was
     open would otherwise be approved unseen; with it, that is refused and the
     approver looks again.
+
+    `paid` records that the money has already gone, in the same step - the
+    usual case when the bill is settled the day it is approved. Left false,
+    the invoice is approved and still to be paid.
     """
 
     comment: str | None = Field(default=None, max_length=500)
     expected_total: Decimal | None = Field(default=None, ge=0)
+    paid: bool = False
+    #: The day it was paid; today when left out.
+    paid_on: date | None = None
+    payment_reference: str | None = Field(default=None, max_length=80)
 
-    @field_validator("comment", mode="before")
+    @field_validator("comment", "payment_reference", mode="before")
     @classmethod
     def _tidy_comment(cls, value: object) -> object:
         return _tidy(value)
+
+
+class InvoicePayment(BaseModel):
+    """Paid, or - correcting a mistake - not paid after all.
+
+    Marking paid takes the day the money went (today when left out) and,
+    usually, the bank's reference for it. Taking it back needs a comment:
+    an invoice going from paid to unpaid is the one an auditor asks about.
+    """
+
+    paid: bool
+    paid_on: date | None = None
+    payment_reference: str | None = Field(default=None, max_length=80)
+    comment: str | None = Field(default=None, max_length=500)
+
+    @field_validator("comment", "payment_reference", mode="before")
+    @classmethod
+    def _tidy_text(cls, value: object) -> object:
+        return _tidy(value)
+
+    @model_validator(mode="after")
+    def _undo_needs_a_reason(self):
+        if not self.paid and (self.comment is None or len(self.comment) < 3):
+            raise ValueError("Say why it is not paid after all - the change is kept in the log.")
+        return self
 
 
 class InvoiceRejection(BaseModel):
@@ -198,6 +231,9 @@ class InvoiceSummary(BaseModel):
     created_at: UTCInstant
     submitted_at: UTCInstant | None = None
     decided_at: UTCInstant | None = None
+    #: An approved invoice with no `paid_on` is approved and still to be paid.
+    paid_on: date | None = None
+    payment_reference: str | None = None
 
 
 class InvoiceRead(InvoiceSummary):
@@ -211,6 +247,8 @@ class InvoiceRead(InvoiceSummary):
     submitted_by_name: str | None = None
     decided_by_name: str | None = None
     decision_comment: str | None = None
+    paid_by_name: str | None = None
+    paid_at: UTCInstant | None = None
     lines: list[InvoiceLineRead]
     history: list[InvoiceEvent] = Field(default_factory=list)
     # What the viewer may do now - the same rules the endpoints enforce, so a
@@ -219,10 +257,14 @@ class InvoiceRead(InvoiceSummary):
     can_submit: bool = False
     can_delete: bool = False
     can_decide: bool = False
+    #: A super admin, on an approved invoice: mark it paid, or correct it.
+    can_record_payment: bool = False
 
 
 class InvoiceList(BaseModel):
     items: list[InvoiceSummary]
     #: Invoices per status, whatever the filter: the tabs' counts.
     counts: dict[str, int]
+    #: Approved invoices split by whether they are paid yet: {"paid", "unpaid"}.
+    payment_counts: dict[str, int] = Field(default_factory=dict)
     total: int

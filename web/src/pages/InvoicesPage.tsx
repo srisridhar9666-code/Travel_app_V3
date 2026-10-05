@@ -3,28 +3,50 @@ import { Plus, Receipt } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { formatMoney } from '@/components/charts';
+import { PaymentBadge } from '@/components/InvoicePayment';
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton } from '@/components/ui';
 import { errorMessage, fetchInvoices } from '@/lib/api';
 import { periodText } from '@/lib/invoices';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
 import {
-  INVOICE_STATUSES,
   INVOICE_STATUS_LABELS,
   INVOICE_STATUS_TONES,
   isInvoiceEditor,
-  type InvoiceStatus,
+  type InvoiceList,
 } from '@/types';
 
-type Tab = InvoiceStatus | 'ALL';
+/** Approved is split in two: still to be paid, and paid. */
+type Tab = 'DRAFT' | 'SUBMITTED' | 'UNPAID' | 'PAID' | 'REJECTED' | 'ALL';
 
 const TAB_LABELS: Record<Tab, string> = {
   DRAFT: 'Draft',
   SUBMITTED: 'Submitted',
-  APPROVED: 'Approved',
+  UNPAID: 'Approved · to pay',
+  PAID: 'Paid',
   REJECTED: 'Rejected',
   ALL: 'All',
 };
+
+const TABS: Tab[] = ['DRAFT', 'SUBMITTED', 'UNPAID', 'PAID', 'REJECTED', 'ALL'];
+
+/** What each tab asks the server for. */
+const TAB_QUERY: Record<Tab, Parameters<typeof fetchInvoices>[0]> = {
+  DRAFT: { status: 'DRAFT' },
+  SUBMITTED: { status: 'SUBMITTED' },
+  UNPAID: { payment: 'unpaid' },
+  PAID: { payment: 'paid' },
+  REJECTED: { status: 'REJECTED' },
+  ALL: {},
+};
+
+function tabCount(tab: Tab, list: InvoiceList | undefined): number | undefined {
+  if (!list) return undefined;
+  if (tab === 'ALL') return list.total;
+  if (tab === 'UNPAID') return list.payment_counts.unpaid;
+  if (tab === 'PAID') return list.payment_counts.paid;
+  return list.counts[tab];
+}
 
 /**
  * Vendor invoices: what the organisation owes each vendor for a period, added
@@ -37,7 +59,8 @@ export default function InvoicesPage() {
   const role = useAuth((s) => s.user?.role);
   const canEdit = isInvoiceEditor(role);
   const [params, setParams] = useSearchParams();
-  const asked = params.get('status') as Tab | null;
+  // "APPROVED" is what older links say; it means the ones still to pay.
+  const asked = params.get('status') === 'APPROVED' ? 'UNPAID' : (params.get('status') as Tab | null);
   const fallback: Tab = role === 'SUPER_ADMIN' ? 'SUBMITTED' : 'ALL';
   const tab: Tab = asked && asked in TAB_LABELS ? asked : fallback;
   const setTab = (next: Tab) =>
@@ -45,12 +68,10 @@ export default function InvoicesPage() {
 
   const invoices = useQuery({
     queryKey: ['invoices', 'list', tab],
-    queryFn: () => fetchInvoices(tab === 'ALL' ? {} : { status: tab }),
+    queryFn: () => fetchInvoices(TAB_QUERY[tab]),
     placeholderData: keepPreviousData,
   });
-  const counts = invoices.data?.counts;
   const rows = invoices.data?.items ?? [];
-  const tabs: Tab[] = [...INVOICE_STATUSES, 'ALL'];
 
   return (
     <div className="space-y-6">
@@ -72,8 +93,8 @@ export default function InvoicesPage() {
       />
 
       <div className="flex flex-wrap gap-1 border-b border-border" role="tablist">
-        {tabs.map((key) => {
-          const count = key === 'ALL' ? invoices.data?.total : counts?.[key];
+        {TABS.map((key) => {
+          const count = tabCount(key, invoices.data);
           return (
             <button
               key={key}
@@ -93,7 +114,7 @@ export default function InvoicesPage() {
                 <span
                   className={cn(
                     'rounded-full px-1.5 text-2xs tabular-nums',
-                    key === 'SUBMITTED' && count > 0
+                    (key === 'SUBMITTED' || key === 'UNPAID') && count > 0
                       ? 'bg-warning-soft text-warning'
                       : 'bg-surface-sunken text-text-subtle',
                   )}
@@ -126,13 +147,18 @@ export default function InvoicesPage() {
             description={
               tab === 'SUBMITTED'
                 ? 'Nothing is waiting for a super admin.'
-                : canEdit
+                : tab === 'UNPAID'
+                  ? 'Every approved invoice is paid.'
+                  : tab === 'PAID'
+                    ? 'A super admin marks an approved invoice paid once the money goes.'
+                    : canEdit
                   ? 'Start one from a vendor and a date range; the booked trips with their costs are listed to pick from.'
                   : 'Admins and system admins prepare invoices.'
             }
             action={
               canEdit &&
-              tab !== 'APPROVED' && (
+              tab !== 'UNPAID' &&
+              tab !== 'PAID' && (
                 <Button onClick={() => navigate('/invoices/new')}>
                   <Plus size={15} />
                   New invoice
@@ -174,9 +200,12 @@ export default function InvoicesPage() {
                       )}
                       {/* On a phone the status sits under the number, not in a
                           column off the edge of the screen. */}
-                      <Badge tone={INVOICE_STATUS_TONES[invoice.status]} className="mt-1 sm:hidden">
-                        {INVOICE_STATUS_LABELS[invoice.status]}
-                      </Badge>
+                      <span className="mt-1 flex flex-wrap gap-1 sm:hidden">
+                        <Badge tone={INVOICE_STATUS_TONES[invoice.status]}>
+                          {INVOICE_STATUS_LABELS[invoice.status]}
+                        </Badge>
+                        <PaymentBadge invoice={invoice} />
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <p className="font-medium">{invoice.vendor_name}</p>
@@ -194,9 +223,12 @@ export default function InvoicesPage() {
                       {formatMoney(invoice.total_amount, true)}
                     </td>
                     <td className="hidden whitespace-nowrap px-4 py-3 sm:table-cell">
-                      <Badge tone={INVOICE_STATUS_TONES[invoice.status]}>
-                        {INVOICE_STATUS_LABELS[invoice.status]}
-                      </Badge>
+                      <span className="flex flex-wrap gap-1">
+                        <Badge tone={INVOICE_STATUS_TONES[invoice.status]}>
+                          {INVOICE_STATUS_LABELS[invoice.status]}
+                        </Badge>
+                        <PaymentBadge invoice={invoice} />
+                      </span>
                     </td>
                     <td className="hidden px-4 py-3 text-xs text-text-muted lg:table-cell sm:pr-5">
                       {invoice.created_by_name ?? '—'}

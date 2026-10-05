@@ -259,6 +259,11 @@ class TravellerRead(BaseModel):
     #: The uploaded ticket to open from this row (GET /tickets/{id}/file):
     #: the confirmed one, else the newest under review. On the admin queue list only.
     ticket_id: int | None = None
+    #: Every file sent with this person's booking - a booking can carry
+    #: several (outward and return, a voucher and its invoice). An admin sees
+    #: the ones still under review too; the traveller and whoever raised the
+    #: trip see the confirmed ones, which they can download.
+    ticket_files: list["TicketFileRead"] = Field(default_factory=list)
 
     # --- the manager's view, before an admin decides (two-level approval) ----
     #: Who this traveller reports to, if that manager's account is active.
@@ -312,6 +317,15 @@ class CoStayMatchRead(BaseModel):
     check_out: date | None = None
     overlapping_nights: int
     status: str
+
+
+class TicketFileRead(BaseModel):
+    """One file on a traveller's booking, as a row shows it."""
+
+    id: int
+    file_name: str | None = None
+    #: Booked with it, and so downloadable by the traveller.
+    confirmed: bool = False
 
 
 # TravellerRead lists these, and is declared first.
@@ -388,11 +402,22 @@ class RequestRead(BaseModel):
     cab_extension_decided_by_name: str | None = None
     cab_extension_decided_at: UTCInstant | None = None
     cab_extension_comment: str | None = None
-    #: How many extra days have been approved; end_at already includes them.
+    #: How many extra days the older "one more day" ask added; end_at already
+    #: includes them.
     cab_extended_days: int = 0
-    #: Whether the person reading may ask for one more day right now. Worked
-    #: out here so the screen and POST /cab-extension apply the same rule.
-    can_extend_cab: bool = False
+
+    # --- extensions: a cab kept longer, a stay made longer -------------------
+    #: The trip this one carries on, when it is an extension.
+    extends_request_id: int | None = None
+    #: How that trip was booked - the car and driver, or the hotel - so the
+    #: admin booking this one sees it, and can book it the same way.
+    previous_booking: str | None = None
+    #: The extension carrying this trip on, while one is live (not cancelled
+    #: or turned down). Extend that one to go further.
+    extended_by_request_id: int | None = None
+    #: Whether the person reading may extend this trip now. Worked out here
+    #: so the screen and POST /extend apply the same rule.
+    can_extend: bool = False
 
     travel_reason: str | None = None
     priority: RequestPriority = RequestPriority.MEDIUM
@@ -605,6 +630,9 @@ class QueueCounts(BaseModel):
     cab_extensions: int = 0
     #: Decided trips whose requester asked to cancel, waiting on an answer.
     cancellations: int = 0
+    #: Extensions - a cab kept longer, a stay made longer - with someone still
+    #: waiting for an admin. Time-critical: the extra day is usually tomorrow.
+    extensions: int = 0
 
 
 # --- Cabs: the car sent, and one more day ---------------------------------
@@ -614,23 +642,13 @@ def _tidy_text(value: str) -> str:
     return " ".join(value.split())
 
 
-class CabBookingPayload(BaseModel):
-    """The car an admin actually sent: which size, its number plate and driver.
-
-    `notify` is for the screen that records the cab while marking the
-    traveller booked: the booking notice then carries these details, so one
-    message reaches them rather than two.
-    """
+class CabCar(BaseModel):
+    """The car an admin actually sent: which size, its number plate and driver."""
 
     booked_cab_type: CabType
     vehicle_number: str = Field(min_length=4, max_length=20)
     driver_name: PersonName = Field(min_length=2, max_length=120)
     driver_phone: MobileNumber = Field(max_length=32)
-    notify: bool = True
-    #: The cab operator who was paid, recorded for everyone riding (approved
-    #: or booked). Left out, each keeps the vendor they had. Admin-only, like
-    #: cost: the travellers are never told it.
-    vendor_id: int | None = None
 
     @field_validator("booked_cab_type")
     @classmethod
@@ -656,18 +674,19 @@ class CabBookingPayload(BaseModel):
         return self
 
 
-class CabExtensionAsk(BaseModel):
-    """A traveller asking to keep their cab one more day, and why."""
+class CabBookingPayload(CabCar):
+    """The car sent, recorded or changed from Cab details.
 
-    reason: str = Field(min_length=3, max_length=500)
+    `notify` is for a screen that records the cab while marking the traveller
+    booked: the booking notice then carries these details, so one message
+    reaches them rather than two.
+    """
 
-    @field_validator("reason")
-    @classmethod
-    def _tidy_reason(cls, value: str) -> str:
-        cleaned = _tidy_text(value)
-        if len(cleaned) < 3:
-            raise ValueError("Say why the cab is needed for another day.")
-        return cleaned
+    notify: bool = True
+    #: The cab operator who was paid, recorded for everyone riding (approved
+    #: or booked). Left out, each keeps the vendor they had. Admin-only, like
+    #: cost: the travellers are never told it.
+    vendor_id: int | None = None
 
 
 class CancellationDecision(BaseModel):
@@ -697,4 +716,96 @@ class CabExtensionDecision(BaseModel):
         self.comment = _tidy_text(self.comment or "") or None
         if not self.approve and (self.comment is None or len(self.comment) < 3):
             raise ValueError("Add a comment saying why - the traveller is shown it.")
+        return self
+
+
+# --- Extensions: a cab kept longer, a stay made longer ----------------------
+
+#: The most days one extension may add. Past a month it is a new trip, and a
+#: slip in the month is the likelier story.
+MAX_EXTENSION_DAYS = 31
+
+
+class ExtensionAsk(BaseModel):
+    """Carry a decided cab or stay on for more days.
+
+    A cab gives when it is wanted on the first extra day and until when; a
+    stay gives its new check-out. The travellers default to everyone riding
+    or staying; whoever asks must be one of them.
+    """
+
+    reason: str = Field(min_length=3, max_length=500)
+    #: Traveller rows on the trip being extended. Left out: everyone on it
+    #: who is approved or booked.
+    traveller_ids: list[int] | None = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    check_out: date | None = None
+    #: Left out, the trip's own priority.
+    priority: RequestPriority | None = None
+
+    @field_validator("reason")
+    @classmethod
+    def _tidy_reason(cls, value: str) -> str:
+        cleaned = _tidy_text(value)
+        if len(cleaned) < 3:
+            raise ValueError("Say why it is needed for longer.")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _times(self):
+        for field in ("start_at", "end_at"):
+            value = getattr(self, field)
+            if value is not None and value.tzinfo is not None:
+                # Wall-clock, like every trip time.
+                setattr(self, field, value.replace(tzinfo=None))
+        if self.start_at and self.end_at and self.end_at < self.start_at:
+            raise ValueError("The cab cannot be let go before it picks up.")
+        if self.traveller_ids is not None and len(self.traveller_ids) != len(set(self.traveller_ids)):
+            raise ValueError("The same traveller is named twice.")
+        return self
+
+
+# --- Booking: one step, everything the traveller needs -----------------------
+
+
+class BookingPayload(BaseModel):
+    """Book one or more approved travellers on a request in one go.
+
+    Everyone named gets the same reference, details and files - a group PNR, a
+    cab they share, rooms on one hotel booking - in one email, their managers
+    copied. A cost is the total for all of them, split evenly. The files are
+    tickets already uploaded for these travellers (POST /requests/{id}/tickets).
+    """
+
+    traveller_ids: list[int] = Field(min_length=1, max_length=50)
+    #: Required, except on a cab with its car given: the plate stands in.
+    booking_reference: str | None = Field(default=None, max_length=120)
+    booking_details: BookingDetails | None = None
+    #: The note to the traveller, kept as the decision's reason.
+    note: str = Field(min_length=3, max_length=500)
+    #: A cab only: the car sent.
+    cab: CabCar | None = None
+    ticket_ids: list[int] = Field(default_factory=list, max_length=20)
+    cost_amount: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+    #: Recorded for everyone booked when sent (null clears it); left out,
+    #: each keeps the vendor they had.
+    vendor_id: int | None = None
+    notify: bool = True
+
+    @field_validator("note", "booking_reference")
+    @classmethod
+    def _tidy(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _tidy_text(value) or None
+
+    @model_validator(mode="after")
+    def _distinct(self):
+        if len(self.traveller_ids) != len(set(self.traveller_ids)):
+            raise ValueError("The same traveller is named twice.")
+        if len(self.ticket_ids) != len(set(self.ticket_ids)):
+            raise ValueError("The same file is named twice.")
+        if self.note is None or len(self.note) < 3:
+            raise ValueError("Add a note for the traveller.")
         return self
