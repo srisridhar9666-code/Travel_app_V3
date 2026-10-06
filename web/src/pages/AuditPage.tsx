@@ -13,11 +13,15 @@ import { useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
 
 import {
+  type Accent,
   Badge,
   Button,
   Card,
   CardHeader,
   EmptyState,
+  ItemCard,
+  ItemList,
+  ItemNumber,
   Select,
   Skeleton,
 } from '@/components/ui';
@@ -41,7 +45,7 @@ const ACTIONS = [
   'EXTRACT', 'NOTIFY', 'OVERRIDE_CONFLICT', 'RECOMMEND', 'VIEW_SENSITIVE', 'EXPORT',
 ];
 
-function actionTone(action: string) {
+function actionTone(action: string): Accent {
   if (action === 'REJECT' || action === 'DELETE') return 'danger';
   if (action === 'APPROVE' || action === 'BOOK' || action === 'CREATE') return 'success';
   if (action === 'OVERRIDE_CONFLICT' || action === 'VIEW_SENSITIVE' || action === 'EXPORT') return 'warning';
@@ -64,51 +68,61 @@ function Row({ entry }: { entry: AuditRow }) {
   const hasDetail = Boolean(entry.changes || entry.reason || entry.ip_address);
 
   return (
-    <li className="border-b border-border last:border-b-0">
-      <div className="flex items-start gap-3 px-5 py-3">
-        <span className="w-32 shrink-0 pt-0.5 font-mono text-2xs text-text-subtle">
-          {timestamp(entry.created_at)}
-        </span>
+    <ItemCard accent={actionTone(entry.action)}>
+      <div className="flex items-start gap-3">
+        {/* On a phone the time and the action get a line of their own above the
+            summary; from sm up they are its two leading columns. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:contents">
+            <span className="shrink-0 font-mono text-2xs text-text-subtle sm:w-32 sm:pt-0.5">
+              {timestamp(entry.created_at)}
+            </span>
 
-        <Badge tone={actionTone(entry.action) as never} className="mt-px shrink-0">
-          {entry.action.replace(/_/g, ' ').toLowerCase()}
-        </Badge>
+            <Badge tone={actionTone(entry.action) as never} className="mt-px shrink-0">
+              {entry.action.replace(/_/g, ' ').toLowerCase()}
+            </Badge>
+          </div>
 
-        <div className="min-w-0 flex-1">
-          <p className="text-sm leading-snug">{entry.summary}</p>
-          <p className="mt-0.5 text-2xs text-text-subtle">
-            {entry.actor_name ?? 'System'}
-            {entry.actor_email ? ` · ${entry.actor_email}` : ''}
-            {` · ${entry.entity_type.replace(/_/g, ' ')}${entry.entity_id ? ` ${entry.entity_id}` : ''}`}
-          </p>
+          <div className="min-w-0 flex-1">
+            {/* The number the integrity banner names if the chain ever breaks. */}
+            <p className="text-sm leading-snug">
+              <ItemNumber value={entry.id} className="mr-1.5" />
+              {entry.summary}
+            </p>
+            <p className="mt-0.5 text-2xs text-text-subtle">
+              {entry.actor_name ?? 'System'}
+              {entry.actor_email ? ` · ${entry.actor_email}` : ''}
+              {` · ${entry.entity_type.replace(/_/g, ' ')}${entry.entity_id ? ` ${entry.entity_id}` : ''}`}
+            </p>
 
-          {open && hasDetail && (
-            <div className="mt-2.5 space-y-2 rounded-md bg-surface-sunken p-3">
-              {entry.changes && (
-                <dl className="space-y-1">
-                  {Object.entries(entry.changes).map(([field, change]) => (
-                    <div key={field} className="flex flex-wrap items-baseline gap-2 text-xs">
-                      <dt className="font-medium">{field}</dt>
-                      <dd className="font-mono text-text-muted">
-                        <span className="text-danger">{String(change.from ?? '—')}</span>
-                        {' → '}
-                        <span className="text-success">{String(change.to ?? '—')}</span>
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              )}
-              {entry.reason && (
-                <p className="text-xs">
-                  <span className="font-medium">Reason: </span>
-                  <span className="text-text-muted">{entry.reason}</span>
-                </p>
-              )}
-              {entry.ip_address && (
-                <p className="font-mono text-2xs text-text-subtle">from {entry.ip_address}</p>
-              )}
-            </div>
-          )}
+            {open && hasDetail && (
+              <div className="mt-2.5 space-y-2 rounded-md bg-surface-sunken p-3">
+                {entry.changes && (
+                  <dl className="space-y-1">
+                    {Object.entries(entry.changes).map(([field, change]) => (
+                      <div key={field} className="flex flex-wrap items-baseline gap-2 text-xs">
+                        <dt className="font-medium">{field}</dt>
+                        <dd className="font-mono text-text-muted">
+                          <span className="text-danger">{String(change.from ?? '—')}</span>
+                          {' → '}
+                          <span className="text-success">{String(change.to ?? '—')}</span>
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+                {entry.reason && (
+                  <p className="text-xs">
+                    <span className="font-medium">Reason: </span>
+                    <span className="text-text-muted">{entry.reason}</span>
+                  </p>
+                )}
+                {entry.ip_address && (
+                  <p className="font-mono text-2xs text-text-subtle">from {entry.ip_address}</p>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {hasDetail && (
@@ -123,7 +137,7 @@ function Row({ entry }: { entry: AuditRow }) {
           </button>
         )}
       </div>
-    </li>
+    </ItemCard>
   );
 }
 
@@ -306,11 +320,11 @@ export default function AuditPage() {
           />
         ) : (
           <>
-            <ul>
+            <ItemList className={lastPage > 1 ? undefined : 'rounded-b-xl'}>
               {audit.data.items.map((entry) => (
                 <Row key={entry.id} entry={entry} />
               ))}
-            </ul>
+            </ItemList>
 
             {lastPage > 1 && (
               <div className="flex items-center justify-between border-t border-border px-5 py-3">

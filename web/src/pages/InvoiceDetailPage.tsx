@@ -19,7 +19,7 @@ import { formatMoney } from '@/components/charts';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PaymentBadge, PaymentFields } from '@/components/InvoicePayment';
 import { Modal } from '@/components/Modal';
-import { Badge, Button, Card, CardHeader, EmptyState, Field, Skeleton } from '@/components/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, Field, Skeleton, ZEBRA_ROWS } from '@/components/ui';
 import {
   approveInvoice,
   recordInvoicePayment,
@@ -351,9 +351,11 @@ function Detail({ invoice }: { invoice: Invoice }) {
                   <th className="px-4 py-2.5 text-right font-medium sm:pr-5">Amount</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                 {invoice.lines.map((line) => (
-                  <tr key={line.id} className={cn(line.problem && 'bg-danger-soft/40')}>
+                  // Important, so a trip that cannot be billed stays red on a
+                  // striped row too.
+                  <tr key={line.id} className={cn(line.problem && '!bg-danger-soft/40')}>
                     <td className="whitespace-nowrap px-4 py-2.5 align-top text-xs sm:pl-5">
                       {dayLabel(line.travel_date)}
                     </td>

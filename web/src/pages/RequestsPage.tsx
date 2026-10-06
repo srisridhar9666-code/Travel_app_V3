@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Download,
+  FileText,
   History,
   Pencil,
   Plane,
@@ -32,6 +33,9 @@ import {
   EmptyState,
   Field,
   Input,
+  ItemCard,
+  ItemList,
+  ItemNumber,
   Select,
   Skeleton,
 } from '@/components/ui';
@@ -39,6 +43,7 @@ import {
   cancelRequest,
   errorMessage,
   fetchMyTicketFile,
+  fetchMyTicketsZip,
   fetchNotifications,
   fetchRequest,
   fetchRequests,
@@ -48,8 +53,15 @@ import {
 } from '@/lib/api';
 import { openFileTab, showFile } from '@/lib/files';
 import { routeLabel } from '@/lib/places';
-import { cabAsked, campaignLabel, revisionField, revisionValue } from '@/lib/requests';
-import { formatInstant } from '@/lib/time';
+import {
+  REQUEST_ACCENT,
+  cabAsked,
+  dayLabel,
+  campaignLabel,
+  revisionField,
+  revisionValue,
+} from '@/lib/requests';
+import { formatInstant, todayInIndia } from '@/lib/time';
 import { useAuth } from '@/store/auth';
 import {
   REQUEST_STATUS_LABELS,
@@ -191,35 +203,66 @@ export default function RequestsPage() {
   const [cancelReason, setCancelReason] = useState('');
   const [extending, setExtending] = useState<TravelRequest | null>(null);
 
-  /** A download link for each file on someone's booking. */
-  const downloads = (request: TravelRequest, traveller: RequestTraveller) => {
+  // Every file at once, for a booking that has several.
+  const downloadAll = useMutation({
+    mutationFn: (vars: { requestId: number; travellerId: number }) =>
+      showFile(
+        null,
+        () => fetchMyTicketsZip(vars.requestId, vars.travellerId),
+        `request-${vars.requestId}-tickets.zip`,
+      ),
+    meta: { errorFallback: 'Could not download the tickets.' },
+  });
+
+  /** The files on someone's booking, one per line, each to open or save. */
+  const fileList = (request: TravelRequest, traveller: RequestTraveller) => {
     const files = (traveller.ticket_files ?? []).filter((f) => f.confirmed);
     if (files.length === 0) return undefined;
     return (
-      <span className="flex flex-wrap gap-x-3">
-        {files.map((file, index) => (
-          <Button
-            key={file.id}
-            size="sm"
-            variant="link"
-            className="h-7 px-0"
-            title={file.file_name ?? undefined}
-            loading={downloadTicket.isPending && downloadTicket.variables?.ticketId === file.id}
-            onClick={() =>
-              downloadTicket.mutate({
-                requestId: request.id,
-                travellerId: traveller.id,
-                ticketId: file.id,
-                name: file.file_name ?? 'ticket',
-                tab: openFileTab(),
-              })
-            }
-          >
-            <Download size={13} />
-            {files.length === 1 ? 'Download ticket' : `File ${index + 1}`}
-          </Button>
+      <ul className="mt-2 space-y-1 border-t border-border pt-2">
+        {files.map((file) => (
+          <li key={file.id} className="flex items-center gap-2 text-xs">
+            <FileText size={13} className="shrink-0 text-text-subtle" />
+            <span className="min-w-0 flex-1 truncate">{file.file_name ?? 'Ticket'}</span>
+            <Button
+              size="sm"
+              variant="link"
+              className="h-7 shrink-0 px-0"
+              loading={downloadTicket.isPending && downloadTicket.variables?.ticketId === file.id}
+              onClick={() =>
+                downloadTicket.mutate({
+                  requestId: request.id,
+                  travellerId: traveller.id,
+                  ticketId: file.id,
+                  name: file.file_name ?? 'ticket',
+                  tab: openFileTab(),
+                })
+              }
+            >
+              <Download size={13} />
+              Open
+            </Button>
+          </li>
         ))}
-      </span>
+      </ul>
+    );
+  };
+
+  /** "Download all" beside the title, when there is more than one file. */
+  const allFiles = (request: TravelRequest, traveller: RequestTraveller) => {
+    const count = (traveller.ticket_files ?? []).filter((f) => f.confirmed).length;
+    if (count < 2) return undefined;
+    return (
+      <Button
+        size="sm"
+        variant="link"
+        className="h-7 px-0"
+        loading={downloadAll.isPending && downloadAll.variables?.travellerId === traveller.id}
+        onClick={() => downloadAll.mutate({ requestId: request.id, travellerId: traveller.id })}
+      >
+        <Download size={13} />
+        Download all {count}
+      </Button>
     );
   };
 
@@ -420,7 +463,7 @@ export default function RequestsPage() {
             }
           />
         ) : (
-          <ul className="divide-y divide-border">
+          <ItemList>
             {rows.map((request) => {
               const Icon = TYPE_ICON[request.request_type];
               const isOwner = request.requester_id === me?.id;
@@ -428,14 +471,15 @@ export default function RequestsPage() {
               const myRow = request.travellers.find((t) => t.user_id === me?.id);
 
               return (
-                <li key={request.id} className="px-5 py-4">
+                <ItemCard key={request.id} accent={REQUEST_ACCENT[request.status]}>
                   <div className="flex flex-wrap items-start gap-3">
                     <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md bg-surface-sunken text-text-muted">
                       <Icon size={15} />
                     </div>
 
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 basis-40">
                       <div className="flex flex-wrap items-center gap-2">
+                        <ItemNumber value={request.id} />
                         <span className="text-sm font-medium">{itinerary(request)}</span>
                         <Badge tone={STATUS_TONE[request.status]}>
                           {REQUEST_STATUS_LABELS[request.status]}
@@ -508,35 +552,6 @@ export default function RequestsPage() {
                         </div>
                       )}
 
-                      {/* A cab's car is its own block, below; here its files. A
-                          ticket is offered to its traveller and to whoever asked
-                          for the trip - the people the server will hand it to. */}
-                      {request.travellers
-                        .filter(
-                          (t) =>
-                            t.status === 'BOOKED' &&
-                            (request.request_type === 'LOCAL_CAB'
-                              ? downloads(request, t)
-                              : t.booking_reference || t.booking_details || downloads(request, t)),
-                        )
-                        .map((t) => (
-                          <BookingSummary
-                            key={t.id}
-                            reference={request.request_type === 'LOCAL_CAB' ? null : t.booking_reference}
-                            details={request.request_type === 'LOCAL_CAB' ? null : t.booking_details}
-                            title={
-                              request.request_type === 'LOCAL_CAB'
-                                ? t.user_id === me?.id
-                                  ? 'Your cab booking'
-                                  : `${t.full_name}'s cab booking`
-                                : t.user_id === me?.id
-                                  ? 'Your booking'
-                                  : `${t.full_name}'s booking`
-                            }
-                            action={downloads(request, t)}
-                          />
-                        ))}
-
                       {request.cancel_reason && (
                         <p className="mt-2 text-xs text-text-subtle">
                           Cancelled{request.cancelled_by_name ? ` by ${request.cancelled_by_name}` : ''}:{' '}
@@ -602,6 +617,40 @@ export default function RequestsPage() {
                     </div>
                   </div>
 
+                  <div className="empty:hidden">
+                  {/* Full width, like the cab below: on a phone the column beside the
+                      action icons is too narrow for a PNR and file names. A cab's car
+                      is its own block; here its files. A
+                      ticket is offered to its traveller and to whoever asked
+                      for the trip - the people the server will hand it to. */}
+                  {request.travellers
+                    .filter(
+                      (t) =>
+                        t.status === 'BOOKED' &&
+                        (request.request_type === 'LOCAL_CAB'
+                          ? fileList(request, t)
+                          : t.booking_reference || t.booking_details || fileList(request, t)),
+                    )
+                    .map((t) => (
+                      <BookingSummary
+                        key={t.id}
+                        reference={request.request_type === 'LOCAL_CAB' ? null : t.booking_reference}
+                        details={request.request_type === 'LOCAL_CAB' ? null : t.booking_details}
+                        title={
+                          request.request_type === 'LOCAL_CAB'
+                            ? t.user_id === me?.id
+                              ? 'Your cab booking'
+                              : `${t.full_name}'s cab booking`
+                            : t.user_id === me?.id
+                              ? 'Your booking'
+                              : `${t.full_name}'s booking`
+                        }
+                        action={allFiles(request, t)}
+                        footer={fileList(request, t)}
+                      />
+                    ))}
+                  </div>
+
                   {/* Full width, below the row like the clash warnings: on a
                       phone the column beside the action icons is too narrow
                       for a plate and a phone number. */}
@@ -614,12 +663,29 @@ export default function RequestsPage() {
                         </>
                       )}
                       {request.can_extend && (
-                        <Button variant="secondary" size="sm" onClick={() => setExtending(request)}>
-                          <CalendarPlus size={14} />
-                          {request.request_type === 'LOCAL_CAB'
-                            ? 'Need the cab longer?'
-                            : 'Need more nights?'}
-                        </Button>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <Button variant="secondary" size="sm" onClick={() => setExtending(request)}>
+                            <CalendarPlus size={14} />
+                            {request.request_type === 'LOCAL_CAB'
+                              ? 'Need the cab longer?'
+                              : 'Need more nights?'}
+                          </Button>
+                          {/* Open until midnight on the trip's last day; after
+                              that, extra days are a new request. */}
+                          {request.extend_until && (
+                            <span
+                              className={
+                                request.extend_until === todayInIndia()
+                                  ? 'text-2xs font-medium text-warning'
+                                  : 'text-2xs text-text-subtle'
+                              }
+                            >
+                              {request.extend_until === todayInIndia()
+                                ? 'You can ask until midnight tonight'
+                                : `You can ask until midnight on ${dayLabel(request.extend_until)}`}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}
@@ -713,10 +779,10 @@ export default function RequestsPage() {
                       )}
                     </div>
                   )}
-                </li>
+                </ItemCard>
               );
             })}
-          </ul>
+          </ItemList>
         )}
       </Card>
 

@@ -37,6 +37,7 @@ import {
   Input,
   Select,
   Skeleton,
+  ZEBRA_ROWS,
 } from '@/components/ui';
 import {
   createUser,
@@ -52,7 +53,7 @@ import {
   type UserUpdatePayload,
 } from '@/lib/api';
 import { formatInstantDate } from '@/lib/time';
-import { MOBILE_HINT, mobileDigits } from '@/lib/utils';
+import { cn, MOBILE_HINT, mobileDigits } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
 import {
   ACCOUNT_ROLES,
@@ -570,7 +571,8 @@ export default function TeamPage() {
             description="Try a different search or filter, or invite someone new."
           />
         ) : (
-          <div className="overflow-x-auto">
+          // Rounded at the foot, so the banded rows keep the card's corners.
+          <div className="overflow-x-auto rounded-b-xl">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-2xs uppercase tracking-widest text-text-subtle">
@@ -583,7 +585,9 @@ export default function TeamPage() {
                   <th className="px-5 py-2.5 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              {/* Banded: each person is two lines (name and email, access and
+                  manager), and the band keeps them together. */}
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                 {rows.map((user) => {
                   const manageable = canManage(user);
                   return (

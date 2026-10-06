@@ -239,3 +239,74 @@ export function PageHeader({
     </div>
   );
 }
+
+/* -------------------------------------------------------------------------
+   Lists of distinct items - requests, asks, notices.
+
+   An item here is several lines (a route, its people, their statuses), so a
+   hairline between two of them reads as just another line. Each item is its
+   own card instead, on a sunken band with space between, a coloured left edge
+   saying where it stands, and its number - so where one ends and the next
+   begins is never a matter of reading carefully.
+   ------------------------------------------------------------------------- */
+
+export type Accent = 'neutral' | 'info' | 'success' | 'warning' | 'danger' | 'brand';
+
+/** The left edge of an item card. Full class names, so Tailwind keeps them. */
+const ACCENT_EDGE: Record<Accent, string> = {
+  neutral: 'border-l-border-strong',
+  info: 'border-l-info',
+  success: 'border-l-success',
+  warning: 'border-l-warning',
+  danger: 'border-l-danger',
+  brand: 'border-l-brand',
+};
+
+/** The band the cards sit on. A <ul>; put ItemCards in it. */
+export function ItemList({ className, children }: { className?: string; children: ReactNode }) {
+  return <ul className={cn('space-y-3 bg-surface-sunken/60 p-3 sm:p-4', className)}>{children}</ul>;
+}
+
+/** One item: its own bordered card, with a coloured left edge for its state. */
+export function ItemCard({
+  accent = 'neutral',
+  className,
+  children,
+}: {
+  accent?: Accent;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <li
+      className={cn(
+        'rounded-lg border border-l-4 border-border bg-surface px-4 py-3.5 shadow-sm sm:px-5',
+        ACCENT_EDGE[accent],
+        className,
+      )}
+    >
+      {children}
+    </li>
+  );
+}
+
+/** "#12" - the number people quote on the phone, set apart from the text. */
+export function ItemNumber({ value, className }: { value: number | string; className?: string }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-2xs font-semibold tabular-nums text-text-muted ring-1 ring-inset ring-border',
+        className,
+      )}
+    >
+      #{value}
+    </span>
+  );
+}
+
+/** Table body rows alternate a band, so a long row is easy to follow across,
+ *  and the row under the pointer takes a light brand tint - never the band's
+ *  colour, which out-ranks a row's own hover and would hide it. Put on the
+ *  <tbody>. */
+export const ZEBRA_ROWS =
+  '[&>tr:nth-child(even)]:bg-surface-sunken [&>tr:hover]:!bg-brand-soft/70';

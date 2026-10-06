@@ -510,6 +510,7 @@ export interface RequestTraveller {
 export interface TicketFile {
   id: number;
   file_name: string | null;
+  file_size: number | null;
   /** Sent with the booking, so the traveller can download it. */
   confirmed: boolean;
 }
@@ -628,6 +629,9 @@ export interface TravelRequest {
   /** Whether the person reading may extend this trip now - the server's
    *  rule, so the button only shows when the ask would be accepted. */
   can_extend: boolean;
+  /** While they may: the trip's last day. Extending is open until midnight
+   *  that day (India time); after it, extra days are a new request. */
+  extend_until: string | null;
 
   /** Why the trip is happening. Mandatory on anything raised from now on;
    *  null on requests that predate the field. */
@@ -846,6 +850,26 @@ export interface Ticket {
 
   /** Where the ticket disagrees with what was asked for. Advisory. */
   mismatches: string[];
+}
+
+/** Several uploaded files read together, as one proposal for the booking
+ *  window. Like every extracted value it is checked before it is saved. */
+export interface CombinedTickets {
+  files: number;
+  files_read: number;
+  booking_reference: string | null;
+  carrier: string | null;
+  service_number: string | null;
+  depart_at: string | null;
+  arrive_at: string | null;
+  hotel_name: string | null;
+  check_in: string | null;
+  check_out: string | null;
+  /** The total across the files, each booking reference counted once. */
+  fare_total: string | null;
+  fare_currency: string | null;
+  /** What to look at before saving: two references, a file not read. */
+  notes: string[];
 }
 
 export interface LedgerRow {

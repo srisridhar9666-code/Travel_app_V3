@@ -17,9 +17,13 @@ like an ID proof scan - outside any static mount, admin-only, never a public URL
 """
 from __future__ import annotations
 
+import io
+import zipfile
+from dataclasses import asdict
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -37,7 +41,7 @@ from app.models.base import naive_utcnow
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.ticket import TicketDocument
 from app.models.user import User
-from app.schemas.ticket import ConfirmPayload, TicketRead
+from app.schemas.ticket import CombinedRead, ConfirmPayload, TicketRead
 from app.services import audit, costs, extraction, notifications, storage
 from app.services import decisions
 
@@ -219,6 +223,13 @@ async def upload_ticket(
     content_type = (file.content_type or "").split(";")[0].strip().lower()
     path = storage.save_in("tickets", row.id, data, extension)
 
+    # The model takes seconds. Off the event loop, so several files uploaded
+    # at once are read side by side and nobody else's request waits on them -
+    # and before anything is written, so this request holds no lock while it
+    # waits: the audit chain's tail row is locked from audit.record to commit,
+    # and a second upload blocking on it would block the loop with it.
+    result = await run_in_threadpool(extraction.extract, data, content_type)
+
     ticket = TicketDocument(
         tenant_id=actor.tenant_id,
         request_id=row.id,
@@ -248,7 +259,7 @@ async def upload_ticket(
         request=http_request,
     )
 
-    _run_extraction(db, ticket, data, content_type, actor, http_request)
+    _apply_extraction(db, ticket, result, actor, http_request)
     db.commit()
     db.refresh(ticket)
     return _to_read(ticket)
@@ -262,12 +273,22 @@ def _run_extraction(
     actor: User,
     http_request: Request | None,
 ) -> None:
-    """Ask the model, write the proposal onto the row, audit what it said.
+    """Ask the model, then record what it said."""
+    _apply_extraction(db, ticket, extraction.extract(data, content_type), actor, http_request)
+
+
+def _apply_extraction(
+    db: Session,
+    ticket: TicketDocument,
+    result: extraction.Extraction,
+    actor: User,
+    http_request: Request | None,
+) -> None:
+    """Write the model's proposal onto the row and audit what it said.
 
     This function is the only thing that writes extracted values, and it never
     touches a traveller's status - that separation is the whole of B3.
     """
-    result = extraction.extract(data, content_type)
     ticket.model_id = result.model_id
     ticket.extracted_at = naive_utcnow()
 
@@ -360,6 +381,34 @@ def list_tickets(request_id: int, actor: AdminUser, db: DbSession) -> list[Ticke
     return [_to_read(t) for t in rows]
 
 
+@router.get("/requests/{request_id}/tickets/combined", response_model=CombinedRead)
+def read_together(
+    request_id: int,
+    ids: Annotated[list[int], Query(min_length=1, max_length=20)],
+    actor: AdminUser,
+    db: DbSession,
+) -> CombinedRead:
+    """What several uploaded files say together - the booking window fills
+    from all of them, not just the first. Files on this request only, and
+    none thrown away."""
+    _load_request(db, request_id, actor)
+    rows = db.execute(
+        select(TicketDocument)
+        .where(
+            TicketDocument.request_id == request_id,
+            TicketDocument.id.in_(ids),
+            TicketDocument.status != TicketStatus.DISCARDED,
+        )
+        .order_by(TicketDocument.id)
+    ).scalars().unique().all()
+    if len(rows) != len(set(ids)):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="A file named is not on this request, or was removed.",
+        )
+    return CombinedRead(**asdict(extraction.combine(list(rows))))
+
+
 @router.get("/tickets/pending", response_model=list[TicketRead])
 def pending_review(actor: AdminUser, db: DbSession) -> list[TicketRead]:
     """Everything the model has read and nobody has looked at yet."""
@@ -450,6 +499,58 @@ def my_ticket_file(
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such file to download.")
     return _confirmed_file(ticket)
+
+
+def _unique_name(name: str, taken: set[str]) -> str:
+    """"ticket.pdf", then "ticket (2).pdf" - a zip cannot hold two of a name."""
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        stem, ext = name, ""
+    candidate, n = name, 2
+    while candidate.casefold() in taken:
+        candidate = f"{stem} ({n}){dot}{ext}"
+        n += 1
+    taken.add(candidate.casefold())
+    return candidate
+
+
+@router.get("/requests/{request_id}/travellers/{traveller_id}/tickets.zip")
+def my_tickets_zip(
+    request_id: int, traveller_id: int, user: CurrentUser, db: DbSession
+) -> Response:
+    """Every file on a traveller's booking in one download - for a booking
+    with several, so nobody has to fetch them one by one. Same people as the
+    single download, confirmed files only."""
+    rows = (
+        db.execute(
+            select(TicketDocument)
+            .where(
+                TicketDocument.request_id == request_id,
+                TicketDocument.traveller_id == traveller_id,
+                TicketDocument.status == TicketStatus.CONFIRMED,
+                TicketDocument.file_path.is_not(None),
+            )
+            .order_by(TicketDocument.id)
+        ).scalars().unique().all()
+        if _may_download(db, request_id, traveller_id, user)
+        else []
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No tickets to download yet.")
+    buffer = io.BytesIO()
+    taken: set[str] = set()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for ticket in rows:
+            name = _unique_name((ticket.file_name or "ticket").replace("/", "_"), taken)
+            bundle.writestr(name, storage.read(ticket.file_path))
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="request-{request_id}-tickets.zip"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/requests/{request_id}/travellers/{traveller_id}/ticket")

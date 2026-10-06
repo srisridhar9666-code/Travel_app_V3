@@ -9,6 +9,7 @@ import type {
   BatchDecisionItem,
   BookingDetails,
   ChainVerification,
+  CombinedTickets,
   Colleague,
   CoStayMatch,
   CostPreview,
@@ -74,7 +75,7 @@ import type {
  * shell compares it with what /health reports, to tell an admin when the API
  * process is older than this page.
  */
-export const API_VERSION = '0.17.0';
+export const API_VERSION = '0.18.0';
 
 /** Negative when `a` is older than `b`, by dotted number. */
 export function compareVersions(a: string, b: string): number {
@@ -788,6 +789,17 @@ export function uploadTicket(requestId: number, travellerId: number, file: File)
     .then((r) => r.data);
 }
 
+/** What several uploaded files say together - the booking window fills from
+ *  all of them, not just the first. */
+export const fetchCombinedTickets = (requestId: number, ids: number[]) =>
+  api
+    .get<CombinedTickets>(`/requests/${requestId}/tickets/combined`, {
+      params: { ids },
+      // ids=1&ids=2, the way FastAPI reads a list.
+      paramsSerializer: { indexes: null },
+    })
+    .then((r) => r.data);
+
 export const reextractTicket = (ticketId: number) =>
   api.post<Ticket>(`/tickets/${ticketId}/extract`, null, { timeout: 120_000 }).then((r) => r.data);
 
@@ -807,6 +819,12 @@ export const fetchMyTicketFile = (requestId: number, travellerId: number, ticket
     .get(`/requests/${requestId}/travellers/${travellerId}/tickets/${ticketId}`, {
       responseType: 'blob',
     })
+    .then((r) => r.data as Blob);
+
+/** Every file on a traveller's booking in one zip. */
+export const fetchMyTicketsZip = (requestId: number, travellerId: number) =>
+  api
+    .get(`/requests/${requestId}/travellers/${travellerId}/tickets.zip`, { responseType: 'blob' })
     .then((r) => r.data as Blob);
 
 // --- the notification ledger ----------------------------------------------

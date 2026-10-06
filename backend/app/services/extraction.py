@@ -270,3 +270,129 @@ def extract(data: bytes, content_type: str) -> Extraction:
     result = parse(text)
     result.model_id = model_id
     return result
+
+
+# ---------------------------------------------------------------------------
+# Several files, one booking
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Combined:
+    """What several files say together, as one proposal for one booking.
+
+    An admin often has more than one file for a trip: the e-ticket and the
+    agent's invoice, two legs of a connecting flight, one ticket per traveller
+    on a group, a hotel voucher and its receipt. Each file is read on its own
+    when it is uploaded; this puts the readings together so the booking window
+    fills from all of them, not just the first.
+    """
+
+    files: int = 0
+    files_read: int = 0
+    booking_reference: str | None = None
+    carrier: str | None = None
+    service_number: str | None = None
+    depart_at: datetime | None = None
+    arrive_at: datetime | None = None
+    hotel_name: str | None = None
+    check_in: date | None = None
+    check_out: date | None = None
+    #: The total across the files, counting a booking once: an e-ticket and
+    #: the invoice for the same PNR show the same fare, and adding them would
+    #: double what was paid. None when no file printed a fare, or the files
+    #: are in different currencies.
+    fare_total: Decimal | None = None
+    fare_currency: str | None = None
+    #: Plain-language things the admin should look at before saving.
+    notes: list[str] = field(default_factory=list)
+
+
+def _distinct(values: list[str | None]) -> list[str]:
+    """Each value once, first spelling kept, compared without case or spaces."""
+    seen: set[str] = set()
+    kept: list[str] = []
+    for value in values:
+        if not value or not str(value).strip():
+            continue
+        key = "".join(str(value).split()).casefold()
+        if key not in seen:
+            seen.add(key)
+            kept.append(str(value).strip())
+    return kept
+
+
+def _joined(values: list[str | None], limit: int) -> str | None:
+    kept = _distinct(values)
+    return " / ".join(kept)[:limit] if kept else None
+
+
+def combine(tickets: list) -> Combined:
+    """Put the readings of several ticket files together, oldest upload first.
+
+    `tickets` are rows with the extracted fields (TicketDocument). A file the
+    model could not read contributes nothing but its count. References,
+    carriers and numbers that differ are all kept, joined - two legs, two
+    PNRs - and the journey runs from the earliest departure to the latest
+    arrival, the stay from the earliest check-in to the latest check-out.
+    """
+    out = Combined(files=len(tickets))
+    read = [t for t in tickets if t.extracted_at is not None and t.extraction_error is None]
+    out.files_read = len(read)
+    unread = out.files - out.files_read
+    if unread:
+        out.notes.append(
+            "1 file could not be read - check it by eye."
+            if unread == 1
+            else f"{unread} files could not be read - check them by eye."
+        )
+    if not read:
+        return out
+
+    out.booking_reference = _joined([t.booking_reference for t in read], 120)
+    out.carrier = _joined([t.carrier for t in read], 120)
+    out.service_number = _joined([t.service_number for t in read], 60)
+    out.hotel_name = _joined([t.hotel_name for t in read], 160)
+    departs = [t.depart_at for t in read if t.depart_at]
+    arrives = [t.arrive_at for t in read if t.arrive_at]
+    out.depart_at = min(departs) if departs else None
+    out.arrive_at = max(arrives) if arrives else None
+    if out.depart_at and out.arrive_at and out.arrive_at < out.depart_at:
+        out.arrive_at = None   # files from different trips; let the admin say
+    ins = [t.check_in for t in read if t.check_in]
+    outs = [t.check_out for t in read if t.check_out]
+    out.check_in = min(ins) if ins else None
+    out.check_out = max(outs) if outs else None
+
+    # The fare: one per booking reference (the largest, if its files differ),
+    # and every file with no reference on its own.
+    priced = [t for t in read if t.fare_amount is not None]
+    currencies = {(t.fare_currency or "INR").upper() for t in priced}
+    if priced and len(currencies) == 1:
+        per_booking: dict[str, Decimal] = {}
+        loose = Decimal("0")
+        for ticket in priced:
+            key = "".join((ticket.booking_reference or "").split()).casefold()
+            if key:
+                per_booking[key] = max(per_booking.get(key, Decimal("0")), ticket.fare_amount)
+            else:
+                loose += ticket.fare_amount
+        out.fare_total = sum(per_booking.values(), Decimal("0")) + loose
+        out.fare_currency = currencies.pop()
+        if len(priced) > 1:
+            out.notes.append(
+                f"The cost adds up the fares on {len(priced)} files"
+                + (", counting each booking reference once." if per_booking else ".")
+            )
+    elif len(currencies) > 1:
+        out.notes.append(
+            f"The files show fares in {', '.join(sorted(currencies))} - enter the cost by hand."
+        )
+
+    references = _distinct([t.booking_reference for t in read])
+    if len(references) > 1:
+        out.notes.append(f"{len(references)} different references: {', '.join(references)}.")
+    names = _distinct([t.passenger_name for t in read])
+    if len(names) > 1:
+        out.notes.append(f"Names on the files: {', '.join(names)}.")
+    return out

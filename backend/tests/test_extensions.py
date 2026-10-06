@@ -369,3 +369,55 @@ def test_the_travellers_on_the_cab_are_untouched(client, db, org):
     row = db.get(TravelRequest, made["id"])
     assert [t.status for t in row.travellers] == [TravellerStatus.APPROVED]
     assert row.end_at == END
+
+
+# ---------------------------------------------------------------------------
+# Until midnight on the last day
+# ---------------------------------------------------------------------------
+
+
+class TestTheDeadline:
+    """A trip can be extended until midnight (India time) on the day the ride
+    or stay ends. After that the extra days are a new request, and the option
+    is gone from the screen."""
+
+    def on(self, monkeypatch, day):
+        monkeypatch.setattr(clock, "local_today", lambda now=None: day)
+
+    def test_a_cab_on_its_last_day(self, client, org, monkeypatch):
+        made = approved(client, org)
+        self.on(monkeypatch, END.date())
+        got = client.get(f"/requests/{made['id']}", headers=auth(org["ravi"])).json()
+        assert got["can_extend"] is True and got["extend_until"] == str(END.date())
+        assert extend(client, org, made["id"], **cab_next_day()).status_code == 201
+
+    def test_a_cab_the_day_after_is_a_new_request(self, client, org, monkeypatch):
+        made = approved(client, org)
+        self.on(monkeypatch, END.date() + timedelta(days=1))
+        got = client.get(f"/requests/{made['id']}", headers=auth(org["ravi"])).json()
+        assert got["can_extend"] is False and got["extend_until"] is None
+        r = extend(client, org, made["id"], **cab_next_day())
+        assert r.status_code == 409
+        assert "only be extended until midnight on its last day" in r.json()["detail"]
+        assert "Raise a new request" in r.json()["detail"]
+
+    def test_a_cab_with_no_end_time_ends_the_day_it_picks_up(self, client, org, monkeypatch):
+        made = approved(client, org, end_at=None)
+        self.on(monkeypatch, START.date() + timedelta(days=1))
+        assert extend(client, org, made["id"], **cab_next_day()).status_code == 409
+
+    def test_a_stay_until_its_check_out_day(self, client, org, monkeypatch):
+        made = approved(client, org, kind="hotel")
+        check_out = DAY + timedelta(days=2)
+        self.on(monkeypatch, check_out)
+        got = client.get(f"/requests/{made['id']}", headers=auth(org["ravi"])).json()
+        assert got["extend_until"] == str(check_out)
+        self.on(monkeypatch, check_out + timedelta(days=1))
+        r = extend(client, org, made["id"], check_out=str(check_out + timedelta(days=2)))
+        assert r.status_code == 409
+
+    def test_well_before_the_end_is_fine(self, client, org, monkeypatch):
+        made = approved(client, org, kind="hotel")
+        self.on(monkeypatch, DAY - timedelta(days=5))
+        assert extend(client, org, made["id"],
+                      check_out=str(DAY + timedelta(days=3))).status_code == 201

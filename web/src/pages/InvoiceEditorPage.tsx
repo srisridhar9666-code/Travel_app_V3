@@ -15,6 +15,7 @@ import {
   PageHeader,
   Select,
   Skeleton,
+  ZEBRA_ROWS,
 } from '@/components/ui';
 import { useVendors } from '@/components/VendorSelect';
 import {
@@ -390,7 +391,7 @@ function InvoiceForm({ invoice }: { invoice: Invoice | null }) {
                   <th className="px-4 py-2.5 text-right font-medium sm:pr-5">Cost</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                 {rows.map((row) => (
                   <TripRow
                     key={row.traveller_id}
@@ -485,11 +486,13 @@ function InvoiceForm({ invoice }: { invoice: Invoice | null }) {
 function TripRow({ row, ticked, onToggle }: { row: EligibleRow; ticked: boolean; onToggle: () => void }) {
   const blocked = Boolean(row.problem);
   return (
+    // Important, so ticked, blocked and hovered rows show over the table's
+    // stripes rather than vanishing on every other row.
     <tr
       className={cn(
         'transition-colors',
-        blocked ? 'bg-danger-soft/40' : 'cursor-pointer hover:bg-surface-sunken',
-        ticked && 'bg-brand-soft/40',
+        blocked ? '!bg-danger-soft/40' : 'cursor-pointer hover:!bg-surface-sunken',
+        ticked && '!bg-brand-soft/40',
       )}
       onClick={blocked ? undefined : onToggle}
     >

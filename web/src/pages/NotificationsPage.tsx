@@ -21,8 +21,11 @@ import {
   CardHeader,
   EmptyState,
   Input,
+  ItemCard,
+  ItemList,
   Select,
   Skeleton,
+  ZEBRA_ROWS,
 } from '@/components/ui';
 import {
   fetchLedger,
@@ -108,12 +111,10 @@ function Inbox() {
           description="Decisions on your requests, booking confirmations and reminders will appear here."
         />
       ) : (
-        <ul className="divide-y divide-border">
+        // One card per notice; an unread one carries the brand edge beside its dot.
+        <ItemList className="rounded-b-xl">
           {rows.map((notice) => (
-            <li
-              key={notice.id}
-              className={cn('px-5 py-3', notice.read_at === null && 'bg-surface-sunken/50')}
-            >
+            <ItemCard key={notice.id} accent={notice.read_at === null ? 'brand' : 'neutral'}>
               <div className="flex flex-wrap items-baseline gap-x-2">
                 {notice.read_at === null && (
                   <span className="h-1.5 w-1.5 rounded-full bg-brand" aria-label="Unread" />
@@ -125,9 +126,9 @@ function Inbox() {
                 <span className="text-2xs text-text-subtle">{when(notice.created_at)}</span>
               </div>
               <p className="mt-1 text-xs leading-relaxed text-text-muted">{notice.body}</p>
-            </li>
+            </ItemCard>
           ))}
-        </ul>
+        </ItemList>
       )}
     </Card>
   );
@@ -406,9 +407,10 @@ function Ledger() {
                   <th className="hidden px-5 py-2.5 font-semibold lg:table-cell">When</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                 {rows.map((row) => (
-                  <tr key={row.id} className="transition-colors hover:bg-surface-sunken/60">
+                  // Important, or the zebra band would swallow the hover on even rows.
+                  <tr key={row.id} className="transition-colors hover:!bg-surface-sunken">
                     <td className="px-5 py-2.5">
                       <div className="font-medium">{row.user_name ?? `User ${row.user_id}`}</div>
                       {row.to_address && (

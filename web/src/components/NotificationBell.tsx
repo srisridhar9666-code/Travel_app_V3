@@ -4,10 +4,9 @@ import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
 
-import { Button } from '@/components/ui';
+import { Button, ItemCard, ItemList } from '@/components/ui';
 import { fetchMyNotices, fetchUnreadCount, markAllRead, markNoticeRead } from '@/lib/api';
 import { timeAgo } from '@/lib/time';
-import { cn } from '@/lib/utils';
 
 /**
  * The bell and its dropdown.
@@ -114,14 +113,14 @@ export default function NotificationBell() {
                 Nothing yet. Decisions on your requests will appear here.
               </p>
             ) : (
-              <ul className="divide-y divide-border">
+              // Cards, so one notice never runs into the next. Tighter than on a
+              // page: the panel is only 20rem wide.
+              <ItemList className="space-y-2 p-2 sm:p-2">
                 {rows.map((notice) => (
-                  <li
+                  <ItemCard
                     key={notice.id}
-                    className={cn(
-                      'px-4 py-2.5',
-                      notice.read_at === null && 'bg-surface-sunken/60',
-                    )}
+                    accent={notice.read_at === null ? 'brand' : 'neutral'}
+                    className="px-3 py-2.5 sm:px-3"
                   >
                     <div className="flex items-start gap-2">
                       {notice.read_at === null && (
@@ -145,9 +144,9 @@ export default function NotificationBell() {
                         </button>
                       )}
                     </div>
-                  </li>
+                  </ItemCard>
                 ))}
-              </ul>
+              </ItemList>
             )}
           </div>
 

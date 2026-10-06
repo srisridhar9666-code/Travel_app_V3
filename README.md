@@ -505,6 +505,36 @@ the extra days cost money that may go on a different invoice. It starts where th
 popup offers "Use the same cab / hotel" from the trip it extends. The older in-place "one
 more day" ask is retired; asks already waiting can still be decided.
 
+**An extension is asked for by midnight of the trip's last day.** A cab's last day is its
+drop-off day (or pick-up day with no drop-off); a stay's is its check-out day. Until midnight
+India time (`clock.local_today()`) the employee can ask to carry on tomorrow; from the next
+day the trip has ended, `extension_refusal` answers 409 "Raise a new request", and
+`RequestRead.extend_until` is null so the button is gone. While it is open, `extend_until`
+is that last day, and My requests says "You can ask until midnight tonight" on the day itself.
+
+**Every file on a booking is read together.** An admin who adds three tickets gets one
+answer, not three: each file is read on its own (`extraction.extract`, off the event loop),
+then `GET /requests/{id}/tickets/combined?ids=` merges them (`extraction.combine`) - distinct
+references, carriers and numbers joined with " / ", the earliest departure and the latest
+arrival (earliest check-in, latest check-out), and the cost added up across files with each
+booking reference counted once, since a ticket and its invoice both show the same fare.
+Fares in different currencies are not added; the popup says so instead. Anything the admin
+has typed is never overwritten by a later reading.
+
+**The Approvals row is the record, the popup is the editor.** Booking, cost and vendor are
+entered in the Mark booked popup; the expanded row underneath shows only what happened - the
+booking as it was saved, the approval log and the edit history - with a "Correct cost or
+vendor" link that opens the editor again. Files are seen later from **Tickets (N)** on the
+row (`TicketFiles.tsx`): view, read again or remove one not sent yet, or download them all.
+Travellers get every booked file on My requests, one by one or as a zip
+(`GET /requests/{rid}/travellers/{tid}/tickets.zip`, same access as a single file).
+
+**One item, one card.** Lists that used to be one line after another are built from
+`ItemList` / `ItemCard` / `ItemNumber` in `components/ui.tsx`: each item a bordered card with
+a coloured left edge for its state (`REQUEST_ACCENT` for requests) and its number in front.
+Tables band alternate rows with `ZEBRA_ROWS` on the `<tbody>`, which also owns the hover -
+a row's own `hover:` class loses to the band and would never show.
+
 **Approved is not paid.** An approved invoice carries `paid_on` and `payment_reference`;
 until a super admin records the payment it shows as *Not paid yet* (the list's "To pay" tab).
 Payment can be recorded with the approval or later, never with a date still to come, and

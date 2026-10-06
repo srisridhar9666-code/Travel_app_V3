@@ -11,7 +11,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import {
@@ -19,8 +19,6 @@ import {
   EMPTY_BOOKING,
   bookingBody,
   bookingDraftValid,
-  draftOfTicket,
-  withTicket,
   type BookingDraft,
 } from '@/components/BookingDetails';
 import {
@@ -36,6 +34,8 @@ import { Badge, Button, Field, Input } from '@/components/ui';
 import { VendorSelect, sharedVendor } from '@/components/VendorSelect';
 import {
   bookTravellers,
+  errorMessage,
+  fetchCombinedTickets,
   fetchRequest,
   fetchTicketFile,
   fetchTickets,
@@ -45,7 +45,8 @@ import {
 import { openFileTab, showFile } from '@/lib/files';
 import { cabAsked, campaignLabel, itinerary } from '@/lib/requests';
 import { cn } from '@/lib/utils';
-import type { CabType, RequestTraveller, Ticket, TravelRequest } from '@/types';
+import { TICKET_FIELD_LABELS } from '@/types';
+import type { CabType, CombinedTickets, RequestTraveller, Ticket, TravelRequest } from '@/types';
 
 /**
  * Booking, in one window: who, the car or the ticket, every file, what it cost
@@ -94,6 +95,50 @@ function draftOfDetails(details: RequestTraveller['booking_details']): BookingDr
   return out;
 }
 
+/** Run `work` over `items`, at most `limit` at a time; every outcome kept. */
+async function settleEach<T, R>(
+  items: T[],
+  limit: number,
+  work: (item: T) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const out: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const index = next++;
+      try {
+        out[index] = { status: 'fulfilled', value: await work(items[index]) };
+      } catch (reason) {
+        out[index] = { status: 'rejected', reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  return out;
+}
+
+/** "14 Oct 2026" for a plain date, never through a time zone. */
+const plainDate = (iso: string) => {
+  const [year, month, day] = iso.slice(0, 10).split('-');
+  const name = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][
+    Number(month) - 1
+  ];
+  return name ? `${day} ${name} ${year}` : iso;
+};
+
+/** What the files say together, as booking fields - only the ones they give. */
+function fieldsOf(read: CombinedTickets, hotel: boolean): Partial<BookingDraft> {
+  const out: Partial<BookingDraft> = {};
+  if (!hotel && read.carrier) out.carrier = read.carrier;
+  if (read.service_number) out.service_number = read.service_number;
+  if (read.depart_at) out.depart_at = read.depart_at.slice(0, 16);
+  if (read.arrive_at) out.arrive_at = read.arrive_at.slice(0, 16);
+  if (read.hotel_name) out.hotel_name = read.hotel_name;
+  const stay = [read.check_in, read.check_out].filter(Boolean).map((d) => plainDate(d!));
+  if (stay.length) out.notes = `Stay ${stay.join(' to ')}`;
+  return out;
+}
+
 /** Files that can go with this booking: uploaded for someone in it, and not
  *  sent with an earlier one or thrown away. */
 const sendable = (ticket: Ticket, who: number[]) =>
@@ -131,11 +176,16 @@ export function BookingModal({
   // The files to send: null until the uploaded ones are known, then the ids.
   const [fileIds, setFileIds] = useState<number[] | null>(null);
   const [cost, setCost] = useState('');
+  const [costFromFiles, setCostFromFiles] = useState(false);
   const [vendorPick, setVendorPick] = useState<number | '' | null>(null);
   const [note, setNote] = useState(isCab ? 'Cab booked' : isHotel ? 'Room booked' : 'Ticket booked');
   const [notify, setNotify] = useState(true);
   const [uploading, setUploading] = useState<{ done: number; of: number } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  // Fields the admin has typed into (or filled "the same as before"). What
+  // the files say never overwrites them.
+  const edited = useRef(new Set<string>());
+  const mark = (...keys: string[]) => keys.forEach((key) => edited.current.add(key));
 
   // The queue list leaves cost and vendor out, so the request is read as the
   // admin; the trip it extends too, for "the same as before".
@@ -151,19 +201,40 @@ export function BookingModal({
   });
 
   // The first time the uploaded files are known: send every one for the
-  // people being booked, and start from what the newest of them says.
+  // people being booked.
   if (fileIds === null && tickets.data) {
-    const ready = tickets.data.filter((t) => sendable(t, who));
-    setFileIds(ready.map((t) => t.id));
-    const read = [...ready].sort((a, b) => b.id - a.id).find((t) => t.status === 'EXTRACTED');
-    if (read) {
-      const found = draftOfTicket(read);
-      if (!isCab) setBooking((now) => (bookingBody(now) ? now : found.draft));
-      setReference((now) => now || found.reference);
-      if (read.fare_amount) setCost((now) => now || String(Number(read.fare_amount)));
-      setFilled('ticket');
-    }
+    setFileIds(tickets.data.filter((t) => sendable(t, who)).map((t) => t.id));
   }
+
+  // Every file is read when it is uploaded; this is what they say together,
+  // and the fields fill from all of them, not just the first.
+  const sending = [...(fileIds ?? [])].sort((a, b) => a - b);
+  const combined = useQuery({
+    // Under the request's tickets, so anything that refreshes them (a file
+    // read again from Tickets, a booking saved) reads them together again too.
+    queryKey: ['tickets', request.id, 'combined', sending.join(',')],
+    queryFn: () => fetchCombinedTickets(request.id, sending),
+    enabled: sending.length > 0,
+  });
+  useEffect(() => {
+    const read = combined.data;
+    if (!read || read.files_read === 0) return;
+    const free = (key: string) => !edited.current.has(key);
+    if (read.fare_total && free('cost')) {
+      setCost(read.fare_total);
+      setCostFromFiles(true);
+    }
+    const readReference = read.booking_reference && free('reference') ? read.booking_reference : '';
+    const fields = isCab
+      ? []
+      : Object.entries(fieldsOf(read, isHotel)).filter(([key, value]) => value && free(key));
+    // Nothing left to fill (all typed, or "the same as before"): the labels
+    // keep saying where the details came from.
+    if (!readReference && fields.length === 0) return;
+    if (readReference) setReference(readReference);
+    if (fields.length > 0) setBooking((now) => ({ ...now, ...Object.fromEntries(fields) }));
+    setFilled('ticket');
+  }, [combined.data, isCab, isHotel]);
 
   const people = (detail.data?.travellers ?? request.travellers).filter((t) => who.includes(t.id));
   const vendorWas = detail.data ? sharedVendor(people) : '';
@@ -172,35 +243,44 @@ export function BookingModal({
 
   const upload = useMutation({
     mutationFn: async (picked: File[]) => {
-      // Each is read as it lands - a few seconds apiece - so one at a time,
-      // with the count on screen.
+      // Each file is read as it lands - a few seconds apiece - so up to three
+      // go at once, and one that fails does not lose the others.
       const owner = who.includes(traveller.id) ? traveller.id : who[0];
-      const added: Ticket[] = [];
-      for (const [index, file] of picked.entries()) {
-        setUploading({ done: index, of: picked.length });
-        added.push(await uploadTicket(request.id, owner, file));
-      }
-      return added;
+      let done = 0;
+      setUploading({ done, of: picked.length });
+      const outcomes = await settleEach(picked, 3, async (file) => {
+        try {
+          return await uploadTicket(request.id, owner, file);
+        } finally {
+          done += 1;
+          setUploading({ done, of: picked.length });
+        }
+      });
+      return outcomes.map((outcome, index) => ({ file: picked[index], outcome }));
     },
-    meta: { errorFallback: 'Could not upload that file.' },
-    onSuccess: (added) => {
+    meta: { errorFallback: 'Could not upload the files.' },
+    onSuccess: (results) => {
+      const added = results.flatMap(({ outcome }) =>
+        outcome.status === 'fulfilled' ? [outcome.value] : [],
+      );
       queryClient.setQueryData<Ticket[]>(['tickets', request.id], (now) => [...added, ...(now ?? [])]);
       setFileIds((now) => [...(now ?? []), ...added.map((t) => t.id)]);
-      const read = added.find((t) => t.status === 'EXTRACTED');
-      if (read) {
-        const found = draftOfTicket(read);
-        if (!isCab) setBooking((now) => withTicket(now, found.draft));
-        if (found.reference) setReference(found.reference);
-        if (read.fare_amount) setCost((now) => now || String(Number(read.fare_amount)));
-        setFilled('ticket');
+      for (const { file, outcome } of results) {
+        if (outcome.status === 'rejected') {
+          toast.error(`${file.name}: ${errorMessage(outcome.reason, 'could not be uploaded')}`);
+        }
+      }
+      const read = added.filter((t) => t.status === 'EXTRACTED').length;
+      if (added.length === 0) return;
+      if (read === added.length) {
         toast.success(
-          added.length === 1 ? 'Read - check the details below' : `${added.length} files added - check the details below`,
+          added.length === 1 ? 'Read - check the details below' : `All ${added.length} read - check the details below`,
         );
       } else {
         toast(
-          added.length === 1
-            ? 'Added, but it could not be read - type the details below. It is still sent.'
-            : `${added.length} files added. None could be read - type the details below.`,
+          read === 0
+            ? `${added.length === 1 ? 'Added, but it' : `${added.length} added, but they`} could not be read - type the details below. ${added.length === 1 ? 'It is' : 'They are'} still sent.`
+            : `${read} of ${added.length} read - check the details below and the files that were not.`,
         );
       }
     },
@@ -242,8 +322,14 @@ export function BookingModal({
     } else if (beforeBooked) {
       // A hotel usually extends the same booking: its name, address and, very
       // often, its confirmation number.
-      setBooking(draftOfDetails(beforeBooked.booking_details));
-      if (beforeBooked.booking_reference) setReference(beforeBooked.booking_reference);
+      // What it says is kept; what it left blank can still fill from a file.
+      const copied = draftOfDetails(beforeBooked.booking_details);
+      setBooking(copied);
+      mark(...(Object.keys(copied) as (keyof BookingDraft)[]).filter((key) => copied[key]));
+      if (beforeBooked.booking_reference) {
+        setReference(beforeBooked.booking_reference);
+        mark('reference');
+      }
     }
     const paidBefore = sharedVendor(before.travellers.filter((t) => t.status === 'BOOKED'));
     if (paidBefore !== '') setVendorPick(paidBefore);
@@ -443,9 +529,25 @@ export function BookingModal({
           {uploading && (
             <p className="flex items-center gap-2 rounded-md bg-surface-sunken px-3 py-2 text-xs text-text-muted">
               <Loader2 size={13} className="animate-spin" />
-              Reading {uploading.of > 1 ? `file ${uploading.done + 1} of ${uploading.of}` : 'the file'} - up
-              to 20 seconds each…
+              {uploading.of > 1
+                ? `Reading ${uploading.of} files - ${uploading.done} done…`
+                : 'Reading the file - up to 20 seconds…'}
             </p>
+          )}
+
+          {files.length > 0 && combined.data && !uploading && (
+            <div className="rounded-md bg-surface-sunken px-3 py-2 text-2xs text-text-muted">
+              <p className="font-medium text-text">
+                {combined.data.files_read === combined.data.files
+                  ? `Read ${combined.data.files === 1 ? 'the file' : `all ${combined.data.files} files`} - the details below are filled from ${combined.data.files === 1 ? 'it' : 'all of them'}.`
+                  : `Read ${combined.data.files_read} of ${combined.data.files} files.`}
+              </p>
+              {combined.data.notes.map((line) => (
+                <p key={line} className="mt-0.5">
+                  {line}
+                </p>
+              ))}
+            </div>
           )}
 
           {files.length === 0 && !uploading ? (
@@ -458,7 +560,7 @@ export function BookingModal({
               <Upload size={16} />
               {isCab
                 ? 'Optional: the vendor’s slip or invoice.'
-                : 'Upload one or more - the details below fill in from the first one read.'}
+                : 'Upload one or more - the details below fill in from all of them.'}
             </button>
           ) : (
             <ul className="space-y-1.5">
@@ -468,7 +570,7 @@ export function BookingModal({
                   className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2"
                 >
                   <FileText size={14} className="shrink-0 text-text-subtle" />
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                  <span className="min-w-0 flex-1 basis-32 truncate text-xs font-medium">
                     {ticket.file_name ?? 'File'}
                   </span>
                   <Badge tone={ticket.status === 'FAILED' ? 'warning' : 'success'}>
@@ -499,6 +601,16 @@ export function BookingModal({
                       {ticket.mismatches.join('; ')}
                     </p>
                   )}
+                  {ticket.status === 'EXTRACTED' && ticket.needs_review.length > 0 && (
+                    <p className="flex basis-full items-start gap-1.5 text-2xs text-warning">
+                      <AlertTriangle size={12} className="mt-px shrink-0" />
+                      Unsure of {ticket.needs_review.map((f) => TICKET_FIELD_LABELS[f] ?? f).join(', ')} - check
+                      against the file.
+                    </p>
+                  )}
+                  {ticket.status === 'FAILED' && ticket.extraction_error && (
+                    <p className="basis-full text-2xs text-text-subtle">{ticket.extraction_error}</p>
+                  )}
                 </li>
               ))}
             </ul>
@@ -513,14 +625,17 @@ export function BookingModal({
             isCab
               ? 'The vendor’s booking ID. Left blank, the vehicle number is used.'
               : filled === 'ticket'
-                ? 'Filled from the ticket - check it.'
+                ? 'Filled from the files - check it.'
                 : undefined
           }
         >
           <Input
             id="bk-reference"
             value={reference}
-            onChange={(e) => setReference(e.target.value)}
+            onChange={(e) => {
+              mark('reference');
+              setReference(e.target.value);
+            }}
             placeholder={isCab ? 'VND-20431' : isHotel ? 'LT-88812' : 'QK8T2M'}
           />
         </Field>
@@ -531,11 +646,20 @@ export function BookingModal({
               {isHotel ? 'The stay' : 'The journey'}
               <span className="ml-1 font-normal text-text-subtle">
                 {filled === 'ticket'
-                  ? '- filled from the ticket; check it'
+                  ? '- filled from the files; check it'
                   : '- what the traveller needs on the day'}
               </span>
             </h3>
-            <BookingFields draft={booking} onChange={setBooking} hotel={isHotel} />
+            <BookingFields
+              draft={booking}
+              hotel={isHotel}
+              onChange={(next) => {
+                mark(
+                  ...(Object.keys(next) as (keyof BookingDraft)[]).filter((key) => next[key] !== booking[key]),
+                );
+                setBooking(next);
+              }}
+            />
           </section>
         )}
 
@@ -546,8 +670,10 @@ export function BookingModal({
             error={costValid ? undefined : 'Rupees, with up to two decimals.'}
             hint={
               split
-                ? `Split evenly: ${split.map((share) => formatMoney(share, true)).join(' + ')}.`
-                : 'Optional now - it can be added later from Cost.'
+                ? `${costFromFiles ? 'From the files. ' : ''}Split evenly: ${split.map((share) => formatMoney(share, true)).join(' + ')}.`
+                : costFromFiles
+                  ? 'Added up from the files - check it against the bill.'
+                  : 'Optional now - it can be corrected later.'
             }
           >
             <div className="relative">
@@ -558,7 +684,11 @@ export function BookingModal({
               <Input
                 id="bk-cost"
                 value={cost}
-                onChange={(e) => setCost(e.target.value)}
+                onChange={(e) => {
+                  mark('cost');
+                  setCostFromFiles(false);
+                  setCost(e.target.value);
+                }}
                 inputMode="decimal"
                 placeholder="0.00"
                 className="pl-7 tabular-nums"

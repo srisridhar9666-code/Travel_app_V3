@@ -65,6 +65,29 @@ class TicketRead(BaseModel):
     mismatches: list[str] = Field(default_factory=list)
 
 
+class CombinedRead(BaseModel):
+    """Several files read together, as one proposal for the booking window.
+
+    Like every extracted value it is a proposal: the admin checks it before
+    anything is saved. `notes` says what to look at - two references, names
+    that differ, a file that could not be read.
+    """
+
+    files: int
+    files_read: int
+    booking_reference: str | None = None
+    carrier: str | None = None
+    service_number: str | None = None
+    depart_at: datetime | None = None
+    arrive_at: datetime | None = None
+    hotel_name: str | None = None
+    check_in: date | None = None
+    check_out: date | None = None
+    fare_total: Decimal | None = None
+    fare_currency: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
 class ConfirmPayload(BaseModel):
     """The admin accepting a ticket, with whatever they corrected.
 

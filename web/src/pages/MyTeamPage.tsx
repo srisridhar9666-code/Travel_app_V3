@@ -15,9 +15,13 @@ import {
   EmptyState,
   Field,
   Input,
+  ItemCard,
+  ItemList,
+  ItemNumber,
   PageHeader,
   Select,
   Skeleton,
+  ZEBRA_ROWS,
 } from '@/components/ui';
 import {
   askToAddMember,
@@ -32,7 +36,7 @@ import {
 } from '@/lib/api';
 import { routeLabel } from '@/lib/places';
 import { formatInstantDate, todayInIndia } from '@/lib/time';
-import { MOBILE_HINT, mobileDigits } from '@/lib/utils';
+import { cn, MOBILE_HINT, mobileDigits } from '@/lib/utils';
 import {
   DESIGNATION_LABELS,
   GENDER_LABELS,
@@ -282,7 +286,7 @@ export default function MyTeamPage() {
                   <th className="px-5 py-2.5 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                 {rows.map((member) => {
                   const waiting = waitingOn.has(member.id);
                   return (
@@ -355,11 +359,18 @@ export default function MyTeamPage() {
         {asks.length === 0 ? (
           <p className="px-5 pb-5 text-sm text-text-muted">Nothing asked yet.</p>
         ) : (
-          <ul className="divide-y divide-border">
+          <ItemList className="rounded-b-xl">
             {asks.map((change) => (
-              <li key={change.id} className="flex flex-wrap items-start gap-3 px-4 py-3 sm:px-5">
-                <div className="min-w-0 flex-1 space-y-1">
+              <ItemCard
+                key={change.id}
+                accent={STATUS_TONE[change.status]}
+                className="flex flex-wrap items-start gap-3"
+              >
+                {/* At least 10rem: on a phone the status and Withdraw drop
+                    below instead of squeezing the ask beside them. */}
+                <div className="min-w-0 flex-1 basis-40 space-y-1">
                   <p className="text-sm">
+                    <ItemNumber value={change.id} className="mr-1.5 align-middle" />
                     <Badge tone={CHANGE_KIND[change.kind].tone} className="mr-1.5 align-middle">
                       {CHANGE_KIND[change.kind].label}
                     </Badge>
@@ -389,9 +400,9 @@ export default function MyTeamPage() {
                     </Button>
                   )}
                 </div>
-              </li>
+              </ItemCard>
             ))}
-          </ul>
+          </ItemList>
         )}
       </Card>
 
@@ -418,12 +429,13 @@ export default function MyTeamPage() {
                   <th className="px-5 py-2.5 font-semibold">Status</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                 {teamTrips.map((trip) => (
                   <tr key={trip.id}>
                     <td className="px-5 py-3">
-                      <div className="font-medium">
-                        Request {trip.id} · {REQUEST_TYPE_LABELS[trip.request_type]}
+                      <div className="flex flex-wrap items-center gap-1.5 font-medium">
+                        <ItemNumber value={trip.id} />
+                        {REQUEST_TYPE_LABELS[trip.request_type]}
                       </div>
                       <div className="text-xs text-text-muted">{trip.project_name}</div>
                     </td>

@@ -46,8 +46,11 @@ import {
   EmptyState,
   Field,
   Input,
+  ItemCard,
+  ItemList,
   Select,
   Skeleton,
+  ZEBRA_ROWS,
 } from '@/components/ui';
 import { MAX_LOG_ROWS, errorMessage, fetchFilterOptions, fetchTravelLogs } from '@/lib/api';
 import { downloadCsv, slug } from '@/lib/csv';
@@ -586,9 +589,9 @@ export default function TravelLogsPage() {
               aria-label="Travel log entries"
             >
               {/* Phones get cards; a seven-column table does not fit a hand. */}
-              <ul className="divide-y divide-border md:hidden">
+              <ItemList className="md:hidden">
                 {data!.entries.map((entry) => (
-                  <li key={entry.traveller_id} className="space-y-1.5 px-4 py-4">
+                  <ItemCard key={entry.traveller_id} accent={STATUS_TONE[entry.status]} className="space-y-1.5">
                     <div className="flex items-start justify-between gap-3">
                       <button
                         type="button"
@@ -615,9 +618,9 @@ export default function TravelLogsPage() {
                     {entry.companions.length > 0 && (
                       <p className="text-xs text-text-subtle">With {entry.companions.join(', ')}</p>
                     )}
-                  </li>
+                  </ItemCard>
                 ))}
-              </ul>
+              </ItemList>
 
               <table className="hidden w-full text-sm md:table">
                 {/* Sticky, so the column names stay in view while the rows
@@ -634,9 +637,11 @@ export default function TravelLogsPage() {
                     <th className="px-4 py-2.5 text-right font-medium">Cost</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-border">
+                <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                   {data!.entries.map((entry) => (
-                    <tr key={entry.traveller_id} className="align-top hover:bg-surface-sunken/60">
+                    // Full sunken and important: a /60 hover under the /50
+                    // stripe would not show on every other row.
+                    <tr key={entry.traveller_id} className="align-top hover:!bg-surface-sunken">
                       <td className="whitespace-nowrap px-4 py-3 tabular-nums text-text-muted lg:py-2.5">{when(entry)}</td>
                       <td className="px-4 py-3 lg:py-2.5">
                         <button

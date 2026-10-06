@@ -18,7 +18,7 @@ to yet, and draft churn would bury the amendments that matter.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -223,6 +223,19 @@ def live_extension(db: Session, request: TravelRequest) -> TravelRequest | None:
     return next((row for row in rows if status_of(row) not in _DEAD), None)
 
 
+def extension_deadline(request: TravelRequest) -> date | None:
+    """The last day a trip can still be extended: the day the ride or stay
+    ends. Until midnight that day (India time) it carries on; after that the
+    extra days are a new request. A cab ends on the day it is let go (or, with
+    no end time, the day it picks up); a stay on its check-out day."""
+    if request.request_type is RequestType.HOTEL:
+        if request.check_in is None:
+            return None
+        return request.check_out or (request.check_in + timedelta(days=1))
+    last = request.end_at or request.start_at
+    return last.date() if last else None
+
+
 def extension_refusal(
     db: Session,
     request: TravelRequest,
@@ -264,6 +277,13 @@ def extension_refusal(
         return status.HTTP_409_CONFLICT, "This cab has no pickup time to carry on from."
     if request.request_type is RequestType.HOTEL and request.check_in is None:
         return status.HTTP_409_CONFLICT, "This stay has no check-in date to carry on from."
+    deadline = extension_deadline(request)
+    if deadline is not None and clock.local_today() > deadline:
+        return (
+            status.HTTP_409_CONFLICT,
+            f"This trip ended on {deadline:%d %b %Y}, and a trip can only be extended until "
+            "midnight on its last day. Raise a new request for the extra days.",
+        )
     child = live_extension(db, request) if live is False else live
     if child:
         return (
@@ -559,17 +579,18 @@ def ticket_files(
     rows = db.execute(
         select(
             TicketDocument.id, TicketDocument.traveller_id, TicketDocument.file_name,
-            TicketDocument.status,
+            TicketDocument.file_size, TicketDocument.status,
         )
         .where(*filters)
         .order_by(TicketDocument.id)
     ).all()
     out: dict[int, list[TicketFileRead]] = {}
-    for ticket_id, traveller_id, file_name, ticket_status in rows:
+    for ticket_id, traveller_id, file_name, file_size, ticket_status in rows:
         out.setdefault(traveller_id, []).append(
             TicketFileRead(
                 id=ticket_id,
                 file_name=file_name,
+                file_size=file_size,
                 confirmed=ticket_status is TicketStatus.CONFIRMED,
             )
         )
@@ -715,6 +736,10 @@ def to_read(
         for t in request.travellers
     ]
     live = live_extension(db, request)
+    can_extend = (
+        request.request_type in EXTENDABLE
+        and extension_refusal(db, request, reader, live=live) is None
+    )
 
     read = RequestRead(
         id=request.id,
@@ -774,10 +799,8 @@ def to_read(
         extends_request_id=request.extends_request_id,
         previous_booking=booking_label(request.extends) if request.extends_request_id else None,
         extended_by_request_id=live.id if live is not None else None,
-        can_extend=(
-            request.request_type in EXTENDABLE
-            and extension_refusal(db, request, reader, live=live) is None
-        ),
+        can_extend=can_extend,
+        extend_until=extension_deadline(request) if can_extend else None,
         travel_reason=request.travel_reason,
         priority=request.priority or RequestPriority.MEDIUM,
         origin_state=request.origin_state,
