@@ -223,6 +223,13 @@ async def upload_ticket(
     content_type = (file.content_type or "").split(";")[0].strip().lower()
     path = storage.save_in("tickets", row.id, data, extension)
 
+    # The model takes seconds. Off the event loop, so several files uploaded
+    # at once are read side by side and nobody else's request waits on them -
+    # and before anything is written, so this request holds no lock while it
+    # waits: the audit chain's tail row is locked from audit.record to commit,
+    # and a second upload blocking on it would block the loop with it.
+    result = await run_in_threadpool(extraction.extract, data, content_type)
+
     ticket = TicketDocument(
         tenant_id=actor.tenant_id,
         request_id=row.id,
@@ -252,9 +259,6 @@ async def upload_ticket(
         request=http_request,
     )
 
-    # The model takes seconds. Off the event loop, so several files uploaded
-    # at once are read side by side and nobody else's request waits on them.
-    result = await run_in_threadpool(extraction.extract, data, content_type)
     _apply_extraction(db, ticket, result, actor, http_request)
     db.commit()
     db.refresh(ticket)

@@ -579,17 +579,18 @@ def ticket_files(
     rows = db.execute(
         select(
             TicketDocument.id, TicketDocument.traveller_id, TicketDocument.file_name,
-            TicketDocument.status,
+            TicketDocument.file_size, TicketDocument.status,
         )
         .where(*filters)
         .order_by(TicketDocument.id)
     ).all()
     out: dict[int, list[TicketFileRead]] = {}
-    for ticket_id, traveller_id, file_name, ticket_status in rows:
+    for ticket_id, traveller_id, file_name, file_size, ticket_status in rows:
         out.setdefault(traveller_id, []).append(
             TicketFileRead(
                 id=ticket_id,
                 file_name=file_name,
+                file_size=file_size,
                 confirmed=ticket_status is TicketStatus.CONFIRMED,
             )
         )

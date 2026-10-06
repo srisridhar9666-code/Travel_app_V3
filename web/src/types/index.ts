@@ -510,6 +510,7 @@ export interface RequestTraveller {
 export interface TicketFile {
   id: number;
   file_name: string | null;
+  file_size: number | null;
   /** Sent with the booking, so the traveller can download it. */
   confirmed: boolean;
 }

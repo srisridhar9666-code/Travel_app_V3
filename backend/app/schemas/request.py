@@ -324,6 +324,7 @@ class TicketFileRead(BaseModel):
 
     id: int
     file_name: str | None = None
+    file_size: int | None = None
     #: Booked with it, and so downloadable by the traveller.
     confirmed: bool = False
 

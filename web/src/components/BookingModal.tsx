@@ -45,6 +45,7 @@ import {
 import { openFileTab, showFile } from '@/lib/files';
 import { cabAsked, campaignLabel, itinerary } from '@/lib/requests';
 import { cn } from '@/lib/utils';
+import { TICKET_FIELD_LABELS } from '@/types';
 import type { CabType, CombinedTickets, RequestTraveller, Ticket, TravelRequest } from '@/types';
 
 /**
@@ -209,7 +210,9 @@ export function BookingModal({
   // and the fields fill from all of them, not just the first.
   const sending = [...(fileIds ?? [])].sort((a, b) => a - b);
   const combined = useQuery({
-    queryKey: ['tickets-combined', request.id, sending.join(',')],
+    // Under the request's tickets, so anything that refreshes them (a file
+    // read again from Tickets, a booking saved) reads them together again too.
+    queryKey: ['tickets', request.id, 'combined', sending.join(',')],
     queryFn: () => fetchCombinedTickets(request.id, sending),
     enabled: sending.length > 0,
   });
@@ -217,20 +220,19 @@ export function BookingModal({
     const read = combined.data;
     if (!read || read.files_read === 0) return;
     const free = (key: string) => !edited.current.has(key);
-    if (read.booking_reference && free('reference')) setReference(read.booking_reference);
     if (read.fare_total && free('cost')) {
       setCost(read.fare_total);
       setCostFromFiles(true);
     }
-    if (!isCab) {
-      setBooking((now) => {
-        const next = { ...now };
-        for (const [key, value] of Object.entries(fieldsOf(read, isHotel))) {
-          if (value && free(key)) next[key as keyof BookingDraft] = value;
-        }
-        return next;
-      });
-    }
+    const readReference = read.booking_reference && free('reference') ? read.booking_reference : '';
+    const fields = isCab
+      ? []
+      : Object.entries(fieldsOf(read, isHotel)).filter(([key, value]) => value && free(key));
+    // Nothing left to fill (all typed, or "the same as before"): the labels
+    // keep saying where the details came from.
+    if (!readReference && fields.length === 0) return;
+    if (readReference) setReference(readReference);
+    if (fields.length > 0) setBooking((now) => ({ ...now, ...Object.fromEntries(fields) }));
     setFilled('ticket');
   }, [combined.data, isCab, isHotel]);
 
@@ -320,8 +322,10 @@ export function BookingModal({
     } else if (beforeBooked) {
       // A hotel usually extends the same booking: its name, address and, very
       // often, its confirmation number.
-      setBooking(draftOfDetails(beforeBooked.booking_details));
-      mark(...Object.keys(EMPTY_BOOKING));
+      // What it says is kept; what it left blank can still fill from a file.
+      const copied = draftOfDetails(beforeBooked.booking_details);
+      setBooking(copied);
+      mark(...(Object.keys(copied) as (keyof BookingDraft)[]).filter((key) => copied[key]));
       if (beforeBooked.booking_reference) {
         setReference(beforeBooked.booking_reference);
         mark('reference');
@@ -556,7 +560,7 @@ export function BookingModal({
               <Upload size={16} />
               {isCab
                 ? 'Optional: the vendor’s slip or invoice.'
-                : 'Upload one or more - the details below fill in from the first one read.'}
+                : 'Upload one or more - the details below fill in from all of them.'}
             </button>
           ) : (
             <ul className="space-y-1.5">
@@ -566,7 +570,7 @@ export function BookingModal({
                   className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2"
                 >
                   <FileText size={14} className="shrink-0 text-text-subtle" />
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                  <span className="min-w-0 flex-1 basis-32 truncate text-xs font-medium">
                     {ticket.file_name ?? 'File'}
                   </span>
                   <Badge tone={ticket.status === 'FAILED' ? 'warning' : 'success'}>
@@ -596,6 +600,16 @@ export function BookingModal({
                       <AlertTriangle size={12} className="mt-px shrink-0" />
                       {ticket.mismatches.join('; ')}
                     </p>
+                  )}
+                  {ticket.status === 'EXTRACTED' && ticket.needs_review.length > 0 && (
+                    <p className="flex basis-full items-start gap-1.5 text-2xs text-warning">
+                      <AlertTriangle size={12} className="mt-px shrink-0" />
+                      Unsure of {ticket.needs_review.map((f) => TICKET_FIELD_LABELS[f] ?? f).join(', ')} - check
+                      against the file.
+                    </p>
+                  )}
+                  {ticket.status === 'FAILED' && ticket.extraction_error && (
+                    <p className="basis-full text-2xs text-text-subtle">{ticket.extraction_error}</p>
                   )}
                 </li>
               ))}

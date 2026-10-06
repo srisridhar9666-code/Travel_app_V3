@@ -14,6 +14,7 @@ import {
 import { openFileTab, showFile } from '@/lib/files';
 import { itinerary } from '@/lib/requests';
 import { formatInstant } from '@/lib/time';
+import { TICKET_FIELD_LABELS } from '@/types';
 import type { Ticket, TravelRequest } from '@/types';
 
 /**
@@ -34,11 +35,16 @@ interface FileGroup {
 const sizeLabel = (bytes: number | null) =>
   bytes == null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
+/** One file, however many people it was booked for. The Tickets button counts
+ *  with the same key, so its number is the number of rows here. */
+const fileKey = (name: string | null, size: number | null, sent: boolean) =>
+  `${name ?? ''}|${size ?? ''}|${sent}`;
+
 function groupFiles(tickets: Ticket[]): FileGroup[] {
   const groups = new Map<string, FileGroup>();
   for (const ticket of tickets) {
     if (ticket.status === 'DISCARDED') continue;
-    const key = `${ticket.file_name ?? ''}|${ticket.file_size ?? ''}|${ticket.status === 'CONFIRMED'}`;
+    const key = fileKey(ticket.file_name, ticket.file_size, ticket.status === 'CONFIRMED');
     const group = groups.get(key) ?? { key, tickets: [], sent: ticket.status === 'CONFIRMED' };
     group.tickets.push(ticket);
     groups.set(key, group);
@@ -53,7 +59,7 @@ function groupFiles(tickets: Ticket[]): FileGroup[] {
 export function fileCount(request: TravelRequest): number {
   const seen = new Set<string>();
   for (const traveller of request.travellers) {
-    for (const file of traveller.ticket_files ?? []) seen.add(`${file.file_name}|${file.confirmed}`);
+    for (const file of traveller.ticket_files ?? []) seen.add(fileKey(file.file_name, file.file_size, file.confirmed));
   }
   return seen.size;
 }
@@ -155,7 +161,9 @@ export function TicketFilesModal({
               <li key={group.key} className="rounded-lg border border-border px-3.5 py-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <FileText size={15} className="shrink-0 text-text-subtle" />
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                  {/* At least 10rem, so on a phone the badge and button wrap
+                      under the name instead of hiding it. */}
+                  <span className="min-w-0 flex-1 basis-40 truncate text-sm font-medium">
                     {first.file_name ?? 'File'}
                   </span>
                   <Badge tone={group.sent ? 'success' : failed ? 'warning' : 'info'}>
@@ -178,6 +186,15 @@ export function TicketFilesModal({
                   {` · ${formatInstant(first.created_at)}`}
                   {group.sent && first.confirmed_reference && ` · booked as ${first.confirmed_reference}`}
                 </p>
+                {failed && first.extraction_error && (
+                  <p className="mt-1 text-2xs text-text-muted">{first.extraction_error}</p>
+                )}
+                {!group.sent && !failed && first.needs_review.length > 0 && (
+                  <p className="mt-1 text-2xs text-warning">
+                    Unsure of {first.needs_review.map((f) => TICKET_FIELD_LABELS[f] ?? f).join(', ')} - check
+                    against the file when you book.
+                  </p>
+                )}
                 {!group.sent && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {failed && (

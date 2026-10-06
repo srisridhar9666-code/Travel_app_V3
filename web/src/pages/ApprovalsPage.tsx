@@ -1077,7 +1077,7 @@ export default function ApprovalsPage() {
                 <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md bg-warning-soft text-warning">
                   <CalendarClock size={15} />
                 </div>
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 basis-40">
                   <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
                     <ItemNumber value={request.id} />
                     {itinerary(request)}
@@ -1096,7 +1096,7 @@ export default function ApprovalsPage() {
                       ` · ${request.booked_cab_type ? CAB_TYPE_LABELS[request.booked_cab_type] : 'Cab'} ${request.cab_vehicle_number}`}
                   </p>
                 </div>
-                <div className="flex shrink-0 gap-1.5">
+                <div className="flex flex-wrap gap-1.5">
                   <Button size="sm" onClick={() => openExtension(request, true)}>
                     Approve
                   </Button>
@@ -1265,7 +1265,9 @@ export default function ApprovalsPage() {
                       <Icon size={15} />
                     </div>
 
-                    <div className="min-w-0 flex-1">
+                    {/* At least 10rem, so on a phone the buttons wrap under it
+                        rather than squeezing the request into a sliver. */}
+                    <div className="min-w-0 flex-1 basis-40">
                       <div className="flex flex-wrap items-center gap-2">
                         <ItemNumber value={request.id} />
                         <span className="text-sm font-medium">{itinerary(request)}</span>

@@ -477,7 +477,7 @@ export default function RequestsPage() {
                       <Icon size={15} />
                     </div>
 
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 basis-40">
                       <div className="flex flex-wrap items-center gap-2">
                         <ItemNumber value={request.id} />
                         <span className="text-sm font-medium">{itinerary(request)}</span>

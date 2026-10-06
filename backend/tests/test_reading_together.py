@@ -16,12 +16,14 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 
 from app.core import clock, ratelimit
 from app.core.enums import Gender, Role, TicketStatus, TravellerStatus
 from app.core.security import create_access_token
 from app.database import get_db
 from app.main import app
+from app.models.audit import AuditLog
 from app.models.project import Project
 from app.models.request import RequestTraveller, TravelRequest
 from app.models.ticket import TicketDocument
@@ -237,10 +239,32 @@ class TestUpload:
         assert got["status"] == "EXTRACTED" and got["booking_reference"] == "QK8T2M"
         assert got["model_id"] == "test-model"
 
+    def test_nothing_is_written_while_the_file_is_read(self, client, db, org, monkeypatch):
+        """The read happens off the event loop, so the request must hold no lock
+        across it: the audit chain's tail is locked from the first audit row to
+        commit, and a second upload waiting on it would stall the loop."""
+        monkeypatch.setattr(storage, "save_in", lambda *a, **k: "tickets/x/upload.pdf")
+        monkeypatch.setattr(storage, "validate", lambda file, data: "pdf")
+        audits_before = db.scalar(select(func.count()).select_from(AuditLog))
+        seen = {}
+
+        def extract(data, content_type):
+            seen["tickets"] = db.scalar(select(func.count()).select_from(TicketDocument))
+            seen["audits"] = db.scalar(select(func.count()).select_from(AuditLog)) - audits_before
+            return Extraction(ok=True, fields={"booking_reference": "QK8T2M"}, model_id="m")
+
+        monkeypatch.setattr(extraction, "extract", extract)
+        r = client.post(f"/requests/{org['request']}/tickets",
+                        params={"traveller_id": org["ravi_row"]}, headers=auth(org["admin"]),
+                        files={"file": ("eticket.pdf", b"%PDF-1.4 ticket", "application/pdf")})
+        assert r.status_code == 201, r.text
+        assert seen == {"tickets": 0, "audits": 0}
+
 
 class TestDownloadingEveryFile:
     def booked(self, db, org, names):
-        ids = [add_file(db, org, name, status=TicketStatus.CONFIRMED) for name in names]
+        ids = [add_file(db, org, name, status=TicketStatus.CONFIRMED, file_size=2048 * (i + 1))
+               for i, name in enumerate(names)]
         return ids
 
     def test_the_traveller_gets_all_in_one_zip(self, client, db, org):
@@ -257,6 +281,9 @@ class TestDownloadingEveryFile:
         got = client.get(f"/requests/{org['request']}", headers=auth(org["ravi"])).json()
         mine = next(t for t in got["travellers"] if t["id"] == org["ravi_row"])
         assert [f["file_name"] for f in mine["ticket_files"]] == ["ticket.pdf", "invoice.pdf"]
+        # The size too, so the admin's Tickets count tells two files of one
+        # name apart, as the Tickets list does.
+        assert [f["file_size"] for f in mine["ticket_files"]] == [2048, 4096]
         for file_id in ids:
             r = client.get(f"/requests/{org['request']}/travellers/{org['ravi_row']}"
                            f"/tickets/{file_id}", headers=auth(org["ravi"]))
