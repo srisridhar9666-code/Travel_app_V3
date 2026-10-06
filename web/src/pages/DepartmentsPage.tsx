@@ -4,7 +4,17 @@ import { useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
 
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { Button, Card, CardHeader, EmptyState, Input, PageHeader, Skeleton } from '@/components/ui';
+import {
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  Input,
+  ItemCard,
+  ItemList,
+  PageHeader,
+  Skeleton,
+} from '@/components/ui';
 import {
   createDepartment,
   deleteDepartment,
@@ -118,11 +128,17 @@ export default function DepartmentsPage() {
             description="Add the first one above."
           />
         ) : (
-          <ul className="divide-y divide-border">
+          // Last thing in the card, so the band keeps the card's rounded foot.
+          <ItemList className="rounded-b-xl">
             {rows.map((department) => {
               const editing = renaming?.id === department.id;
               return (
-                <li key={department.id} className="flex flex-wrap items-center gap-3 px-4 py-3 sm:px-5">
+                // An empty department - the kind that can be removed - reads quieter.
+                <ItemCard
+                  key={department.id}
+                  accent={department.member_count > 0 ? 'brand' : 'neutral'}
+                  className="flex flex-wrap items-center gap-3"
+                >
                   {editing ? (
                     <form
                       className="flex min-w-0 flex-1 items-center gap-2"
@@ -190,10 +206,10 @@ export default function DepartmentsPage() {
                       </Button>
                     </div>
                   )}
-                </li>
+                </ItemCard>
               );
             })}
-          </ul>
+          </ItemList>
         )}
       </Card>
 

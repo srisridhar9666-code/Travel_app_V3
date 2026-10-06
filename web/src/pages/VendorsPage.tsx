@@ -16,6 +16,7 @@ import {
   PageHeader,
   Select,
   Skeleton,
+  ZEBRA_ROWS,
 } from '@/components/ui';
 import { useVendors } from '@/components/VendorSelect';
 import { createVendor, errorMessage, setVendorActive, updateVendor } from '@/lib/api';
@@ -205,7 +206,8 @@ export default function VendorsPage() {
             }
           />
         ) : (
-          <div className="overflow-x-auto">
+          // Rounded at the foot, so the banded rows keep the card's corners.
+          <div className="overflow-x-auto rounded-b-xl">
             <table className="w-full text-left text-sm">
               <thead className="border-b border-border text-2xs uppercase tracking-wide text-text-subtle">
                 <tr>
@@ -216,7 +218,9 @@ export default function VendorsPage() {
                   {canEdit && <th className="px-4 py-2.5 sm:px-5" aria-label="Actions" />}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              {/* Banded: a vendor runs to several lines, and the band shows
+                  where one ends and the next begins. */}
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                 {rows.map((vendor) => (
                   <tr key={vendor.id} className={cn(!vendor.is_active && 'text-text-muted')}>
                     <td className="px-4 py-3 align-top sm:px-5">

@@ -8,9 +8,20 @@ import { ManagerReview } from '@/components/ManagerReview';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
 import { ConflictList } from '@/components/RequestForm';
-import { Badge, Button, Card, EmptyState, Field, PageHeader, Skeleton } from '@/components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  ItemCard,
+  ItemList,
+  ItemNumber,
+  PageHeader,
+  Skeleton,
+} from '@/components/ui';
 import { errorMessage, fetchTeamReviews, recommendRequest } from '@/lib/api';
-import { cabAsked, campaignLabel, itinerary } from '@/lib/requests';
+import { cabAsked, campaignLabel, itinerary, REQUEST_ACCENT } from '@/lib/requests';
 import { formatInstant } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
@@ -194,7 +205,7 @@ export default function TeamApprovalsPage() {
             }
           />
         ) : (
-          <ul className="divide-y divide-border">
+          <ItemList className="rounded-b-xl">
             {rows.map((request) => {
               const Icon = TYPE_ICON[request.request_type];
               const team = mine(request);
@@ -202,13 +213,14 @@ export default function TeamApprovalsPage() {
               const pending = team.filter((t) => t.status === 'PENDING');
               const answered = pending.some((t) => t.manager_recommendation);
               return (
-                <li key={request.id} className="px-4 py-4 sm:px-5">
+                <ItemCard key={request.id} accent={REQUEST_ACCENT[request.status]}>
                   <div className="flex flex-wrap items-start gap-3">
                     <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md bg-surface-sunken text-text-muted">
                       <Icon size={15} />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
+                        <ItemNumber value={request.id} />
                         <span className="text-sm font-medium">{itinerary(request)}</span>
                         <Badge tone={request.status === 'SUBMITTED' ? 'info' : 'neutral'}>
                           {REQUEST_STATUS_LABELS[request.status]}
@@ -313,10 +325,10 @@ export default function TeamApprovalsPage() {
                       )}
                     </div>
                   )}
-                </li>
+                </ItemCard>
               );
             })}
-          </ul>
+          </ItemList>
         )}
       </Card>
 

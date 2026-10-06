@@ -10,7 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  Eye,
+  FileText,
   Flag,
   History,
   IndianRupee,
@@ -39,7 +39,8 @@ import { PriorityBadge } from '@/components/PriorityBadge';
 import { ConflictList } from '@/components/RequestForm';
 import { RoomAllotment } from '@/components/RoomSharing';
 import CostPanel from '@/components/CostPanel';
-import TicketPanel from '@/components/TicketPanel';
+import { formatMoney } from '@/components/charts';
+import { TicketFilesModal, fileCount } from '@/components/TicketFiles';
 import { VendorSelect, sharedVendor } from '@/components/VendorSelect';
 import {
   Badge,
@@ -49,6 +50,9 @@ import {
   EmptyState,
   Field,
   Input,
+  ItemCard,
+  ItemList,
+  ItemNumber,
   Select,
   Skeleton,
 } from '@/components/ui';
@@ -61,17 +65,16 @@ import {
   fetchRequest,
   fetchRequests,
   fetchRevisions,
-  fetchTicketFile,
   recordCabBooking,
   type CabBookingBody,
 } from '@/lib/api';
 import { downloadCsv, slug, type CsvCell } from '@/lib/csv';
-import { openFileTab, showFile } from '@/lib/files';
 import {
   cabAsked,
   campaignLabel,
   dayTime,
   itinerary,
+  REQUEST_ACCENT,
   revisionField,
   revisionValue,
 } from '@/lib/requests';
@@ -424,6 +427,38 @@ function DecisionLog({ travellers }: { travellers: RequestTraveller[] }) {
 }
 
 
+/** What was booked and what it cost, read only. The booking window records
+ *  both; "Correct cost" is for a fix afterwards. The queue list leaves cost
+ *  out, so the request is read as the admin. */
+function BookingRecord({ requestId, onCorrect }: { requestId: number; onCorrect: () => void }) {
+  const detail = useQuery({ queryKey: ['request', requestId], queryFn: () => fetchRequest(requestId) });
+  if (detail.isPending) return <Skeleton className="h-10 w-full" />;
+  const going = (detail.data?.travellers ?? []).filter(
+    (t) => t.status === 'BOOKED' || t.status === 'APPROVED',
+  );
+  if (going.length === 0) return <p className="text-xs text-text-subtle">Nobody is booked yet.</p>;
+  return (
+    <div className="space-y-2">
+      <ul className="space-y-1.5">
+        {going.map((t) => (
+          <li key={t.id} className="flex flex-wrap items-baseline gap-x-2 text-xs">
+            <span className="font-medium">{t.full_name}</span>
+            <span className="font-mono text-2xs text-text-muted">{t.booking_reference ?? 'not booked yet'}</span>
+            <span className="tabular-nums">{t.cost_amount ? formatMoney(t.cost_amount, true) : 'no cost yet'}</span>
+            {t.vendor_name && <span className="text-text-muted">· {t.vendor_name}</span>}
+            {t.invoice_number && (
+              <span className="text-text-subtle">· on {t.invoice_number}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+      <Button size="sm" variant="link" className="h-auto px-0 text-2xs" onClick={onCorrect}>
+        Correct cost or vendor
+      </Button>
+    </div>
+  );
+}
+
 function RevisionHistory({ requestId }: { requestId: number }) {
   const revisions = useQuery({
     queryKey: ['revisions', requestId],
@@ -513,6 +548,10 @@ export default function ApprovalsPage() {
   const [booking, setBooking] = useState<{ request: TravelRequest; traveller: RequestTraveller } | null>(
     null,
   );
+  // The files on a request, and correcting a cost after booking - each in its
+  // own window, so the expanded row is the record and nothing else.
+  const [ticketsFor, setTicketsFor] = useState<TravelRequest | null>(null);
+  const [costFor, setCostFor] = useState<TravelRequest | null>(null);
   // Only extensions - a cab kept longer, a stay made longer - on the waiting tabs.
   const [extensionsOnly, setExtensionsOnlyState] = useState(false);
   // The car sent, typed in Cab details.
@@ -644,14 +683,6 @@ export default function ApprovalsPage() {
         toast.success(`Exported ${written} ${written === 1 ? 'row' : 'rows'}`);
       }
     },
-  });
-
-  // Straight from the traveller's row, so a booked ticket is one click away
-  // rather than behind the row's expand button.
-  const viewTicket = useMutation({
-    mutationFn: (vars: { ticketId: number; tab: Window | null }) =>
-      showFile(vars.tab, () => fetchTicketFile(vars.ticketId), `ticket-${vars.ticketId}`),
-    meta: { errorFallback: 'Could not open the ticket.' },
   });
 
   const decide = useMutation({
@@ -1040,14 +1071,17 @@ export default function ApprovalsPage() {
             } for one more day`}
             description="Approving keeps the cab a day longer: its end time moves and the travellers are told, their managers copied."
           />
-          <ul className="divide-y divide-border">
+          <ItemList>
             {pendingExtensions.map((request) => (
-              <li key={request.id} className="flex flex-wrap items-start gap-3 px-5 py-3.5">
+              <ItemCard key={request.id} accent="warning" className="flex flex-wrap items-start gap-3">
                 <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md bg-warning-soft text-warning">
                   <CalendarClock size={15} />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">{itinerary(request)}</p>
+                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                    <ItemNumber value={request.id} />
+                    {itinerary(request)}
+                  </p>
                   <p className="mt-0.5 text-xs text-text-muted">
                     {request.cab_extension_requested_by_name ?? request.requester_name}:{' '}
                     {request.cab_extension_reason}
@@ -1070,9 +1104,9 @@ export default function ApprovalsPage() {
                     Reject
                   </Button>
                 </div>
-              </li>
+              </ItemCard>
             ))}
-          </ul>
+          </ItemList>
         </Card>
       )}
 
@@ -1218,13 +1252,14 @@ export default function ApprovalsPage() {
             }
           />
         ) : (
-          <ul className="divide-y divide-border">
+          <ItemList>
             {rows.map((request) => {
               const Icon = TYPE_ICON[request.request_type];
               const isOpen = expanded === request.id;
+              const files = fileCount(request);
 
               return (
-                <li key={request.id} className="px-5 py-4">
+                <ItemCard key={request.id} accent={REQUEST_ACCENT[request.status]}>
                   <div className="flex flex-wrap items-start gap-3">
                     <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md bg-surface-sunken text-text-muted">
                       <Icon size={15} />
@@ -1232,6 +1267,7 @@ export default function ApprovalsPage() {
 
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
+                        <ItemNumber value={request.id} />
                         <span className="text-sm font-medium">{itinerary(request)}</span>
                         <Badge tone={STATUS_TONE[request.status]}>
                           {REQUEST_STATUS_LABELS[request.status]}
@@ -1284,6 +1320,18 @@ export default function ApprovalsPage() {
                       )}
                     </div>
 
+                    {files > 0 && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        title="Every file on this request - view or download"
+                        onClick={() => setTicketsFor(request)}
+                      >
+                        <FileText size={13} />
+                        Tickets ({files})
+                      </Button>
+                    )}
+
                     {isCab(request) && !request.is_cancelled && request.travellers.some(riding) && (
                       <Button
                         variant="secondary"
@@ -1303,7 +1351,7 @@ export default function ApprovalsPage() {
                       variant="ghost"
                       size="sm"
                       aria-expanded={isOpen}
-                      title={isOpen ? 'Hide details' : 'Tickets, cost and history'}
+                      title={isOpen ? 'Hide the record' : 'What was booked, and who did what'}
                       onClick={() => setExpanded(isOpen ? null : request.id)}
                     >
                       <ChevronDown
@@ -1366,19 +1414,6 @@ export default function ApprovalsPage() {
                         )}
 
                         <div className="ml-auto flex gap-1.5">
-                          {(traveller.ticket_files ?? []).map((file, index, all) => (
-                            <Button
-                              key={file.id}
-                              size="sm"
-                              variant="ghost"
-                              loading={viewTicket.isPending && viewTicket.variables?.ticketId === file.id}
-                              onClick={() => viewTicket.mutate({ ticketId: file.id, tab: openFileTab() })}
-                              title={`${file.file_name ?? 'File'}${file.confirmed ? '' : ' - not sent yet'}`}
-                            >
-                              <Eye size={13} />
-                              {all.length === 1 ? 'View ticket' : `File ${index + 1}`}
-                            </Button>
-                          ))}
                           {traveller.status === 'PENDING' && (
                             <>
                               <Button
@@ -1442,57 +1477,39 @@ export default function ApprovalsPage() {
                   )}
 
                   {isOpen && (
-                    <div className="mt-3 space-y-3">
-                      {/* Tickets sit beside the edit history: both are things an
-                          admin reads before they commit to anything. */}
-                      <div className="rounded-md border border-border bg-surface-sunken px-3 py-3">
-                        <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
-                          <Ticket size={12} />
-                          Tickets
-                        </p>
-                        <TicketPanel
-                          requestId={request.id}
-                          travellers={request.travellers}
-                          onChanged={refresh}
-                          onBook={(traveller) => start(request, traveller, 'BOOKED')}
-                        />
-                      </div>
-
+                    <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                      {/* The record: what was booked and paid, who decided
+                          what, and what changed. Booking itself - the files,
+                          the cost, the vendor - is in the booking window. */}
                       <div className="rounded-md border border-border bg-surface-sunken px-3 py-3">
                         <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
                           <IndianRupee size={12} />
-                          Cost
+                          Booked and paid
                         </p>
-                        <CostPanel
-                          requestId={request.id}
-                          travellers={request.travellers}
-                          onChanged={refresh}
-                        />
+                        <BookingRecord requestId={request.id} onCorrect={() => setCostFor(request)} />
                       </div>
 
-                      <div className="grid gap-3 lg:grid-cols-2">
-                        <div className="rounded-md border border-border bg-surface-sunken px-3 py-3">
-                          <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
-                            <Gavel size={12} />
-                            Approval log
-                          </p>
-                          <DecisionLog travellers={request.travellers} />
-                        </div>
+                      <div className="rounded-md border border-border bg-surface-sunken px-3 py-3">
+                        <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
+                          <Gavel size={12} />
+                          Approval log
+                        </p>
+                        <DecisionLog travellers={request.travellers} />
+                      </div>
 
-                        <div className="rounded-md border border-border bg-surface-sunken px-3 py-3">
-                          <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
-                            <History size={12} />
-                            Edit history
-                          </p>
-                          <RevisionHistory requestId={request.id} />
-                        </div>
+                      <div className="rounded-md border border-border bg-surface-sunken px-3 py-3">
+                        <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
+                          <History size={12} />
+                          Edit history
+                        </p>
+                        <RevisionHistory requestId={request.id} />
                       </div>
                     </div>
                   )}
-                </li>
+                </ItemCard>
               );
             })}
-          </ul>
+          </ItemList>
         )}
 
         {requests.data && total > 0 && (
@@ -1526,6 +1543,27 @@ export default function ApprovalsPage() {
         footer={<>{decisionActions}</>}
       >
         {decisionFields}
+      </Modal>
+
+      {ticketsFor && (
+        <TicketFilesModal
+          key={ticketsFor.id}
+          request={ticketsFor}
+          onClose={() => setTicketsFor(null)}
+          onChanged={refresh}
+        />
+      )}
+
+      <Modal
+        open={costFor !== null}
+        onClose={() => setCostFor(null)}
+        title={costFor ? `Correct the cost · #${costFor.id}` : ''}
+        description="For a fix after booking. A cost on an approved invoice is locked; one on an invoice still being prepared moves the invoice with it."
+        className="sm:max-w-xl"
+      >
+        {costFor && (
+          <CostPanel requestId={costFor.id} travellers={costFor.travellers} onChanged={refresh} />
+        )}
       </Modal>
 
       {booking && (

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { Field, Input } from '@/components/ui';
 import { dayTime } from '@/lib/requests';
-import type { BookingDetails, Ticket } from '@/types';
+import type { BookingDetails } from '@/types';
 
 /** The form's copy of the details: strings, "" for blank. */
 export interface BookingDraft {
@@ -27,49 +27,6 @@ export const EMPTY_BOOKING: BookingDraft = {
   hotel_address: '',
   notes: '',
 };
-
-/** <input type="datetime-local"> wants exactly "YYYY-MM-DDTHH:mm". */
-const localInput = (iso: string | null | undefined) => (iso ? iso.slice(0, 16) : '');
-
-/**
- * What an uploaded ticket says, as a booking draft with its reference. The
- * admin checks it before saving; it only saves retyping what the ticket shows.
- */
-export function draftOfTicket(ticket: Ticket): { draft: BookingDraft; reference: string } {
-  const stay = [ticket.check_in, ticket.check_out].filter(Boolean).join(' to ');
-  return {
-    reference: ticket.booking_reference ?? '',
-    draft: {
-      ...EMPTY_BOOKING,
-      carrier: ticket.hotel_name ? '' : (ticket.carrier ?? ''),
-      service_number: ticket.service_number ?? '',
-      depart_at: localInput(ticket.depart_at),
-      arrive_at: localInput(ticket.arrive_at),
-      hotel_name: ticket.hotel_name ?? '',
-      notes: stay ? `Stay ${stay}` : '',
-    },
-  };
-}
-
-/** The ticket to book a traveller with: the newest one uploaded for them that
- *  has not been thrown away. */
-export function ticketToBookWith(tickets: Ticket[], travellerId: number): Ticket | null {
-  return (
-    [...tickets]
-      .filter((t) => t.traveller_id === travellerId && t.status !== 'DISCARDED')
-      .sort((a, b) => b.id - a.id)[0] ?? null
-  );
-}
-
-/** A draft with every field the ticket read laid over it: an admin who has
- *  just uploaded a ticket wants what it says. */
-export function withTicket(current: BookingDraft, fromTicket: BookingDraft): BookingDraft {
-  const next = { ...current };
-  for (const [key, value] of Object.entries(fromTicket) as [keyof BookingDraft, string][]) {
-    if (value.trim()) next[key] = value;
-  }
-  return next;
-}
 
 /** The draft as the API takes it: blanks dropped, nothing at all as null. */
 export function bookingBody(draft: BookingDraft): BookingDetails | null {
@@ -143,14 +100,17 @@ export function BookingSummary({
   details,
   title = 'Your booking',
   action,
+  footer,
 }: {
   reference: string | null;
   details: BookingDetails | null;
   title?: string;
-  /** Beside the title - the traveller's "Download ticket". */
+  /** Beside the title - the traveller's "Download all". */
   action?: ReactNode;
+  /** Under the details - the files on the booking, one per line. */
+  footer?: ReactNode;
 }) {
-  if (!reference && !details && !action) return null;
+  if (!reference && !details && !action && !footer) return null;
   const d = details ?? {};
   const hotel = Boolean(d.hotel_name || d.hotel_address);
   const rows: [string, string | null | undefined][] = hotel
@@ -187,6 +147,7 @@ export function BookingSummary({
             </div>
           ))}
       </dl>
+      {footer}
     </div>
   );
 }

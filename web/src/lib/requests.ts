@@ -1,6 +1,7 @@
 /** Small wordings shared by My requests and Approvals, so the two screens
  *  describe the same request the same way. */
 
+import type { Accent } from '@/components/ui';
 import { routeLabel } from '@/lib/places';
 import {
   CAB_TRIP_LABELS,
@@ -9,8 +10,21 @@ import {
   type CabTrip,
   type CabType,
   type RequestPriority,
+  type RequestStatus,
   type TravelRequest,
 } from '@/types';
+
+/** The left edge of a request's card: the same reading as its status badge. */
+export const REQUEST_ACCENT: Record<RequestStatus, Accent> = {
+  DRAFT: 'neutral',
+  SUBMITTED: 'info',
+  PARTIALLY_APPROVED: 'warning',
+  APPROVED: 'success',
+  BOOKED: 'success',
+  REJECTED: 'danger',
+  CANCELLED: 'neutral',
+  EXPIRED: 'warning',
+};
 
 const dayMonth = (iso: string) =>
   new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso).toLocaleDateString(undefined, {

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { Modal } from '@/components/Modal';
-import { Button, Card, CardHeader, Field } from '@/components/ui';
+import { Button, Card, CardHeader, Field, ItemCard, ItemList, ItemNumber } from '@/components/ui';
 import { decideCancellation, errorMessage, fetchRequests } from '@/lib/api';
 import { dayTime, itinerary } from '@/lib/requests';
 import type { TravelRequest } from '@/types';
@@ -62,14 +62,19 @@ export function CancellationAsks({ scope }: { scope: 'admin' | 'manager' }) {
             : 'Your team asked to cancel these approved or booked trips. An admin may answer too; the first answer counts.'
         }
       />
-      <ul className="divide-y divide-border">
+      <ItemList className="rounded-b-xl">
         {items.map((request) => (
-          <li key={request.id} className="flex flex-wrap items-start gap-3 px-5 py-3.5">
+          <ItemCard key={request.id} accent="danger" className="flex flex-wrap items-start gap-3">
             <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md bg-danger-soft text-danger">
               <Ban size={15} />
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium">{itinerary(request)}</p>
+            {/* At least 10rem: on a phone the buttons drop below instead of
+                squeezing the trip into a sliver beside them. */}
+            <div className="min-w-0 flex-1 basis-40">
+              <p className="text-sm font-medium">
+                <ItemNumber value={request.id} className="mr-1.5 align-middle" />
+                {itinerary(request)}
+              </p>
               <p className="mt-0.5 text-xs text-text-muted">
                 <span className="font-medium text-text">
                   {request.cancellation_requested_by_name ?? request.requester_name}:
@@ -78,11 +83,11 @@ export function CancellationAsks({ scope }: { scope: 'admin' | 'manager' }) {
               </p>
               {request.cancellation_requested_at && (
                 <p className="mt-0.5 text-2xs text-text-subtle">
-                  Asked {dayTime(request.cancellation_requested_at)} · Request {request.id}
+                  Asked {dayTime(request.cancellation_requested_at)}
                 </p>
               )}
             </div>
-            <div className="flex shrink-0 gap-1.5">
+            <div className="flex flex-wrap gap-1.5">
               <Button
                 size="sm"
                 variant="danger"
@@ -106,9 +111,9 @@ export function CancellationAsks({ scope }: { scope: 'admin' | 'manager' }) {
                 Keep the trip
               </Button>
             </div>
-          </li>
+          </ItemCard>
         ))}
-      </ul>
+      </ItemList>
 
       <Modal
         open={deciding !== null}

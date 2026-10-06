@@ -4,7 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { formatMoney } from '@/components/charts';
 import { PaymentBadge } from '@/components/InvoicePayment';
-import { Badge, Button, Card, EmptyState, PageHeader, Skeleton } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, ZEBRA_ROWS } from '@/components/ui';
 import { errorMessage, fetchInvoices } from '@/lib/api';
 import { periodText } from '@/lib/invoices';
 import { cn } from '@/lib/utils';
@@ -180,11 +180,12 @@ export default function InvoicesPage() {
                   <th className="hidden px-4 py-2.5 font-medium lg:table-cell sm:pr-5">Created by</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                 {rows.map((invoice) => (
+                  // Important, so the hover still shows on a striped row.
                   <tr
                     key={invoice.id}
-                    className="cursor-pointer transition-colors hover:bg-surface-sunken"
+                    className="cursor-pointer transition-colors hover:!bg-surface-sunken"
                     onClick={() => navigate(`/invoices/${invoice.id}`)}
                   >
                     <td className="whitespace-nowrap px-4 py-3 sm:px-5">

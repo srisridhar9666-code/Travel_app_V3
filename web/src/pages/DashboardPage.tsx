@@ -25,7 +25,7 @@ import {
 } from '@/components/ReportFilters';
 import { TravelHistoryPanel } from '@/components/TravelHistoryPanel';
 import { Columns, HorizontalBars, StatTile, formatMoney } from '@/components/charts';
-import { Button, Card, CardHeader, PageHeader, Skeleton } from '@/components/ui';
+import { Button, Card, CardHeader, PageHeader, Skeleton, ZEBRA_ROWS } from '@/components/ui';
 import { fetchFilterOptions, fetchInsights, fetchQueueCounts } from '@/lib/api';
 import { periodLabel } from '@/lib/time';
 import { cn } from '@/lib/utils';
@@ -129,13 +129,15 @@ function DepartmentBreakdown({
                   <th className="px-4 py-2.5 text-right font-medium sm:px-5">Spend</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                 {rows.map((row) => (
                   <tr
                     key={row.department_id}
                     className={cn(
-                      'cursor-pointer hover:bg-surface-sunken/60',
-                      selected === row.department_id && 'bg-surface-sunken',
+                      // Important, or the zebra band would hide the hover and the
+                      // choice on even rows.
+                      'cursor-pointer hover:!bg-surface-sunken',
+                      selected === row.department_id && '!bg-surface-sunken',
                     )}
                     onClick={() => onSelect(row.department_id)}
                   >
@@ -425,13 +427,14 @@ function AdminDashboard() {
                       <th className="px-4 py-2.5 text-right font-medium sm:px-5">Spend</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-border">
+                  <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                     {data.by_campaign.map((row) => (
                       <tr
                         key={row.project_id}
                         className={cn(
-                          'cursor-pointer hover:bg-surface-sunken/60',
-                          f.projectId === row.project_id && 'bg-surface-sunken',
+                          // Important, as in the department table above.
+                          'cursor-pointer hover:!bg-surface-sunken',
+                          f.projectId === row.project_id && '!bg-surface-sunken',
                         )}
                         onClick={() =>
                           f.update({ campaign: f.projectId === row.project_id ? undefined : String(row.project_id) })

@@ -418,6 +418,10 @@ class RequestRead(BaseModel):
     #: Whether the person reading may extend this trip now. Worked out here
     #: so the screen and POST /extend apply the same rule.
     can_extend: bool = False
+    #: While they may: the last day they can, the day the ride or stay ends.
+    #: Until midnight that day (India time); after it, extra days are a new
+    #: request.
+    extend_until: date | None = None
 
     travel_reason: str | None = None
     priority: RequestPriority = RequestPriority.MEDIUM

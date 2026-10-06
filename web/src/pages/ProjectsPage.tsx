@@ -24,6 +24,7 @@ import {
   Input,
   Select,
   Skeleton,
+  ZEBRA_ROWS,
 } from '@/components/ui';
 import {
   archiveProject,
@@ -319,7 +320,8 @@ export default function ProjectsPage() {
             }
           />
         ) : (
-          <div className="overflow-x-auto">
+          // Rounded at the foot, so the banded rows keep the card's corners.
+          <div className="overflow-x-auto rounded-b-xl">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-2xs uppercase tracking-widest text-text-subtle">
@@ -331,7 +333,8 @@ export default function ProjectsPage() {
                   <th className="px-5 py-2.5 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              {/* Banded, so a wide row is easy to follow across. */}
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
                 {rows.map((project) => (
                   <tr
                     key={project.id}

@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 
 import { EmailLinkChoice } from '@/components/EmailLinkChoice';
 import { Modal } from '@/components/Modal';
-import { Badge, Button, Card, CardHeader, Field } from '@/components/ui';
+import { Badge, Button, Card, CardHeader, Field, ItemCard, ItemList, ItemNumber } from '@/components/ui';
 import { approveTeamChange, errorMessage, fetchTeamChanges, rejectTeamChange } from '@/lib/api';
 import { formatInstantDate } from '@/lib/time';
 import {
@@ -139,17 +139,22 @@ export function TeamChangesPanel({
         title={`Manager requests · ${items.length} waiting`}
         description="Managers ask to add, edit or remove the people who report to them. Nothing changes until you approve."
       />
-      <ul className="divide-y divide-border">
+      <ItemList className="rounded-b-xl">
         {items.map((change) => {
           const kind = CHANGE_KIND[change.kind];
           const Icon = kind.icon;
+          // Every ask here is waiting on an admin: the same reading as the
+          // manager's own "Waiting for an admin" badge.
           return (
-            <li key={change.id} className="flex flex-wrap items-start gap-3 px-4 py-3 sm:px-5">
+            <ItemCard key={change.id} accent="warning" className="flex flex-wrap items-start gap-3">
               <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-surface-sunken text-text-muted">
                 <Icon size={15} />
               </div>
-              <div className="min-w-0 flex-1 space-y-1">
+              {/* At least 10rem: on a phone the buttons drop below instead of
+                  squeezing the ask into a sliver beside them. */}
+              <div className="min-w-0 flex-1 basis-40 space-y-1">
                 <p className="text-sm">
+                  <ItemNumber value={change.id} className="mr-1.5 align-middle" />
                   <Badge tone={kind.tone} className="mr-1.5 align-middle">
                     {kind.label}
                   </Badge>
@@ -170,10 +175,10 @@ export function TeamChangesPanel({
                   Reject
                 </Button>
               </div>
-            </li>
+            </ItemCard>
           );
         })}
-      </ul>
+      </ItemList>
 
       <Modal
         open={deciding !== null}
