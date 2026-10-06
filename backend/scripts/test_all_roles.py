@@ -135,7 +135,27 @@ def test_auth(s: State) -> None:
     s.check(tok is not None, "Super admin login (admin@designboxed.com)")
     s.super_admin_token = tok or ""
 
-    tok = login("sachin@designboxed.com", "ChangeMe@123")
+    # The fulfilment admin: invited by the super admin on a fresh install, or
+    # already there from an earlier run.
+    tok = login("sachin@designboxed.com", "Karnatak@9876")
+    if tok is None and s.super_admin_token:
+        status, resp = post("/users", {
+            "email": "sachin@designboxed.com",
+            "full_name": "Sachin Rao",
+            "role": "ADMIN",
+            "designation": "MANAGER",
+            "gender": "MALE",
+            "phone": "9876500001",
+            "base_state": "Karnataka",
+            "base_location": "Bengaluru",
+            "send_email": False,
+        }, s.super_admin_token)
+        if status == 201 and resp.get("invite_url"):
+            post("/auth/set-password", {
+                "token": resp["invite_url"].split("token=")[-1],
+                "password": "Karnatak@9876",
+            })
+        tok = login("sachin@designboxed.com", "Karnatak@9876")
     s.check(tok is not None, "Admin login (sachin@designboxed.com)")
     s.admin_token = tok or ""
 
@@ -176,7 +196,7 @@ def test_super_admin_creates_users(s: State) -> None:
         s.check(st2 == 200, "Manager password set via invite token")
 
     # Find manager id
-    st_u, users_list = get("/users?q=ramesh.manager", s.super_admin_token)
+    st_u, users_list = get("/users?search=ramesh.manager", s.super_admin_token)
     if st_u == 200 and users_list.get("items"):
         s.manager_id = users_list["items"][0]["id"]
         info(f"Manager ID: {s.manager_id}")
@@ -205,7 +225,7 @@ def test_super_admin_creates_users(s: State) -> None:
         s.check(st2 == 200, "Ground staff password set via invite token")
 
     # Find staff id
-    st_u, users_list = get("/users?q=priya.staff", s.super_admin_token)
+    st_u, users_list = get("/users?search=priya.staff", s.super_admin_token)
     if st_u == 200 and users_list.get("items"):
         s.staff_id = users_list["items"][0]["id"]
         info(f"Staff ID: {s.staff_id}")

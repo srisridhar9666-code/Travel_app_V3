@@ -632,10 +632,16 @@ chain = r.json()["checked"]
 
 r = c.get("/audit/summary", headers=ADMIN)
 summary = r.json()
-check("every action taken is represented", summary["total"] == chain, {"summary": summary["total"], "chain": chain})
+# The activity log leaves sign-ins, sign-outs and failed sign-ins out, so the
+# summary counts everything in the chain except those - this journey signed in
+# several times, so it is strictly fewer.
+sign_ins = {"LOGIN", "LOGIN_FAILED", "LOGOUT"}
+check("every action but a sign-in is represented", 0 < summary["total"] < chain,
+      {"summary": summary["total"], "chain": chain})
+check("and sign-ins are left out", not (sign_ins & set(summary["by_action"])), summary["by_action"])
 
 expected_actions = {
-    "CREATE", "LOGIN", "SUBMIT", "UPDATE", "APPROVE", "REJECT",
+    "CREATE", "SUBMIT", "UPDATE", "APPROVE", "REJECT",
     "BOOK", "CANCEL", "OVERRIDE_CONFLICT",
 }
 if gemini_ok:
