@@ -30,6 +30,8 @@ import {
 } from '@/components/CabDetails';
 import { formatMoney } from '@/components/charts';
 import { Modal } from '@/components/Modal';
+import { PhoneBadge } from '@/components/PhoneBadge';
+import { RequestTripHighlight } from '@/components/RequestTripHighlight';
 import { Badge, Button, Field, Input } from '@/components/ui';
 import { VendorSelect, sharedVendor } from '@/components/VendorSelect';
 import {
@@ -180,6 +182,7 @@ export function BookingModal({
   const [vendorPick, setVendorPick] = useState<number | '' | null>(null);
   const [note, setNote] = useState(isCab ? 'Cab booked' : isHotel ? 'Room booked' : 'Ticket booked');
   const [notify, setNotify] = useState(true);
+  const [attachTickets, setAttachTickets] = useState(true);
   const [uploading, setUploading] = useState<{ done: number; of: number } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   // Fields the admin has typed into (or filled "the same as before"). What
@@ -366,6 +369,7 @@ export function BookingModal({
       note: note.trim(),
       ticket_ids: files.map((f) => f.id),
       notify,
+      attach_tickets: attachTickets,
     };
     if (!isCab) body.booking_details = bookingBody(booking);
     if (carReady) {
@@ -404,6 +408,8 @@ export function BookingModal({
       }
     >
       <div className="space-y-5">
+        <RequestTripHighlight request={request} variant="banner" />
+
         {/* An extension: book it as the trip before it was, in one tap. */}
         {request.extends_request_id != null && (
           <section className="rounded-lg border border-brand/40 bg-brand-soft px-3.5 py-3">
@@ -441,6 +447,23 @@ export function BookingModal({
           </section>
         )}
 
+        {approved.length <= 1 && people.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-surface-sunken px-3.5 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-text-muted">Booking for:</span>
+              <span className="rounded bg-brand-soft px-2 py-0.5 text-sm font-semibold text-brand ring-1 ring-inset ring-brand/20">
+                {people[0].full_name}
+              </span>
+              <span className="text-xs text-text-muted">({people[0].email})</span>
+            </div>
+            {people[0].phone ? (
+              <PhoneBadge phone={people[0].phone} name={people[0].full_name} size="sm" />
+            ) : (
+              <span className="text-2xs text-text-subtle">No phone on profile</span>
+            )}
+          </div>
+        )}
+
         {approved.length > 1 && (
           <fieldset>
             <legend className="mb-1.5 text-xs font-medium">
@@ -470,7 +493,12 @@ export function BookingModal({
                         )
                       }
                     />
-                    {t.full_name}
+                    <span className="rounded bg-brand-soft px-1.5 py-0.5 font-semibold text-brand ring-1 ring-inset ring-brand/20">
+                      {t.full_name}
+                    </span>
+                    {t.phone && (
+                      <PhoneBadge phone={t.phone} name={t.full_name} size="xs" />
+                    )}
                   </label>
                 );
               })}
@@ -740,12 +768,34 @@ export function BookingModal({
             <span className="mt-0.5 block text-text-muted">
               {notify
                 ? `One email to ${names(people.map((p) => p.full_name)) || 'nobody yet'}` +
-                  ` with the booking details${files.length ? ` and ${files.length === 1 ? 'the file' : `all ${files.length} files`} attached` : ''}.` +
+                  ` with the booking details${files.length && attachTickets ? ` and ${files.length === 1 ? 'the file' : `all ${files.length} files`} attached` : ''}.` +
                   (managers.length ? ` ${names(managers)} ${managers.length === 1 ? 'is' : 'are'} on Cc.` : '')
                 : 'No email. They still see it in the app, and the activity log keeps it.'}
             </span>
           </span>
         </label>
+
+        {files.length > 0 && notify && (
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-md bg-surface-sunken px-3 py-2.5">
+            <input
+              type="checkbox"
+              checked={attachTickets}
+              onChange={(e) => setAttachTickets(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 accent-[rgb(var(--primary))]"
+            />
+            <span className="text-xs">
+              <span className="flex items-center gap-1.5 font-medium">
+                <TicketIcon size={13} />
+                Attach {files.length === 1 ? 'ticket' : 'tickets'} directly to the email
+              </span>
+              <span className="mt-0.5 block text-text-muted">
+                {attachTickets
+                  ? `Send ${files.length === 1 ? 'the uploaded ticket file' : `all ${files.length} uploaded files`} as email attachments.`
+                  : 'Do not attach files to email. The booking details are sent, and tickets remain downloadable from the portal.'}
+              </span>
+            </span>
+          </label>
+        )}
       </div>
     </Modal>
   );

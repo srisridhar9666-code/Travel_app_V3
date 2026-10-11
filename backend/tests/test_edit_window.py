@@ -310,7 +310,9 @@ def test_editing_an_unrelated_field_leaves_the_share_alone(db, world):
 
 def test_status_follows_the_traveller_rows(db, world):
     project, ravi, meera = world
-    row = make_request(db, project, [ravi, meera])
+    row = make_request(
+        db, project, [ravi, meera], check_in=date(2026, 11, 1), check_out=date(2026, 11, 4)
+    )
 
     def status():
         return svc.to_read(db, row, tenant_id=TENANT).status

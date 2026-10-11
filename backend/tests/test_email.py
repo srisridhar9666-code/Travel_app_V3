@@ -576,3 +576,12 @@ def test_a_test_ignores_the_allowlist_but_says_so(wire, monkeypatch):
     assert result["ok"] is True and result["stage"] == "done"
     assert result["allowlisted"] is False
     assert wire.made[-1].calls[-1] == ("send", "me@example.com")
+
+
+def test_toggle_email_service(monkeypatch):
+    monkeypatch.setattr(email, "ENV_FILE", type("P", (), {"exists": lambda self: False})())
+    shown = email.set_email_enabled(True)
+    assert shown["enabled"] is True
+    shown2 = email.set_email_enabled(False)
+    assert shown2["enabled"] is False
+

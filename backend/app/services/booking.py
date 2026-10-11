@@ -388,13 +388,14 @@ def book(
     db.flush()
 
     # --- telling them --------------------------------------------------------
+    email_attachments = attachments if payload.attach_tickets else []
     queued += _tell(
         db,
         request=request,
         booked=booked,
         admin=admin,
         note=payload.note,
-        attachments=attachments,
+        attachments=email_attachments,
         send_email=payload.notify,
     )
     if car_changed and payload.notify:

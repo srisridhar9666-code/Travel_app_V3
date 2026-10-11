@@ -106,6 +106,7 @@ class ConfirmPayload(BaseModel):
     cost_amount: Decimal | None = Field(default=None, ge=0, le=Decimal("10000000"))
     #: Skip the traveller email, for a correction that should not re-notify.
     notify: bool = True
+    attach_ticket: bool = True
 
 
 class NotificationRow(BaseModel):
@@ -212,6 +213,10 @@ class EmailSettings(BaseModel):
 class EmailStatus(BaseModel):
     problem: str | None = None
     settings: EmailSettings
+
+
+class EmailTogglePayload(BaseModel):
+    enabled: bool
 
 
 class EmailTestRequest(BaseModel):

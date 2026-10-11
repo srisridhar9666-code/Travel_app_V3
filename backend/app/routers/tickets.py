@@ -706,15 +706,22 @@ def confirm_ticket(
     )
 
     if payload.notify:
-        _send_confirmation(db, ticket=ticket, request=row, traveller=traveller, actor=actor,
-                           http_request=http_request)
+        _send_confirmation(
+            db, ticket=ticket, request=row, traveller=traveller, actor=actor,
+            http_request=http_request, attach_ticket=payload.attach_ticket,
+        )
 
     db.commit()
     db.refresh(ticket)
     return _to_read(ticket)
 
 
-def _confirmation_body(ticket: TicketDocument, request: TravelRequest, name: str) -> str:
+def _confirmation_body(
+    ticket: TicketDocument,
+    request: TravelRequest,
+    name: str,
+    attached: bool = True,
+) -> str:
     """The email the traveller actually receives.
 
     Plain text on purpose: field staff read this on a phone, often on a bad
@@ -748,12 +755,17 @@ def _confirmation_body(ticket: TicketDocument, request: TravelRequest, name: str
     if request.project:
         lines += ["", f"Campaign: {request.project.code} - {request.project.name}"]
     link = f"{get_settings().frontend_base_url.rstrip('/')}/requests"
-    lines += [
-        "",
-        "Your ticket is attached to this email. You can also download it any time "
-        f"from My requests: {link}",
-        "Carry photo ID that matches the name on the booking.",
-    ]
+    lines.append("")
+    if attached and ticket.file_path:
+        lines.append(
+            "Your ticket is attached to this email. You can also download it any time "
+            f"from My requests: {link}"
+        )
+    else:
+        lines.append(
+            f"You can view and download your booking details any time from My requests: {link}"
+        )
+    lines.append("Carry photo ID that matches the name on the booking.")
     return "\n".join(lines)
 
 
@@ -765,6 +777,7 @@ def _send_confirmation(
     traveller: RequestTraveller,
     actor: User,
     http_request: Request | None,
+    attach_ticket: bool = True,
 ) -> None:
     """Tell the traveller, in app and by email, and record both attempts."""
     person = traveller.user
@@ -788,7 +801,9 @@ def _send_confirmation(
         ),
         request_id=request.id,
         email_subject=f"Booking confirmed - {where}",
-        email_body=_confirmation_body(ticket, request, person.full_name),
+        email_body=_confirmation_body(
+            ticket, request, person.full_name, attached=attach_ticket and bool(ticket.file_path)
+        ),
         # The same Cc as every other decision on this traveller: their manager
         # sees the booking land.
         cc_users=[person.active_manager] if person.active_manager is not None else None,
@@ -798,7 +813,7 @@ def _send_confirmation(
                 name=ticket.file_name or "ticket",
                 content_type=ticket.content_type,
             )
-            if ticket.file_path
+            if ticket.file_path and attach_ticket
             else None
         ),
     )

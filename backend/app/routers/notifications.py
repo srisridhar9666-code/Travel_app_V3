@@ -34,6 +34,7 @@ from app.schemas.ticket import (
     EmailStatus,
     EmailTestRequest,
     EmailTestResult,
+    EmailTogglePayload,
     JobResult,
     NotificationLedger,
     NotificationRow,
@@ -334,6 +335,30 @@ def send_test_email(
     )
     db.commit()
     return EmailTestResult(**result, settings=EmailSettings(**email_service.effective_settings()))
+
+
+@router.post("/email/toggle", response_model=EmailStatus)
+def toggle_email(
+    payload: EmailTogglePayload, actor: AdminUser, http_request: Request, db: DbSession
+) -> EmailStatus:
+    """Turn the email service on or off."""
+    email_service.set_email_enabled(payload.enabled)
+    audit.record(
+        db,
+        action=AuditAction.UPDATE,
+        entity_type="email_service",
+        summary=f"{actor.full_name} {'enabled' if payload.enabled else 'disabled'} email services",
+        changes={"enabled": payload.enabled},
+        tenant_id=actor.tenant_id,
+        actor=actor,
+        request=http_request,
+    )
+    db.commit()
+    return EmailStatus(
+        problem=email_service.configuration_problem(),
+        settings=EmailSettings(**email_service.effective_settings()),
+    )
+
 
 
 # ---------------------------------------------------------------------------

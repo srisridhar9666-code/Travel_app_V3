@@ -748,6 +748,7 @@ export interface BookingBody {
   /** Sent: recorded for everyone booked (null clears it). Left out: kept. */
   vendor_id?: number | null;
   notify?: boolean;
+  attach_tickets?: boolean;
 }
 
 export const bookTravellers = (requestId: number, body: BookingBody) =>
@@ -846,6 +847,11 @@ export const retryFailedEmail = () =>
  *  connection to the mail server, so cheap to load. */
 export const fetchEmailStatus = () =>
   api.get<EmailStatus>('/notifications/email/status').then((r) => r.data);
+
+/** Turn email services on or off dynamically. */
+export const toggleEmailService = (enabled: boolean) =>
+  api.post<EmailStatus>('/notifications/email/toggle', { enabled }).then((r) => r.data);
+
 
 /** Send one real message and report how far it got. Slow when the mail server
  *  is unreachable: the server waits out its own connection timeout first. */

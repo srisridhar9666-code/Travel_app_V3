@@ -237,6 +237,7 @@ class TravellerRead(BaseModel):
     user_id: int
     full_name: str
     email: str
+    phone: str | None = None
     designation: Designation | None = None
     status: TravellerStatus
     is_requester: bool
@@ -358,6 +359,7 @@ class RequestRead(BaseModel):
 
     requester_id: int
     requester_name: str
+    requester_phone: str | None = None
 
     mode: TravelMode | None = None
     origin: str | None = None
@@ -797,6 +799,7 @@ class BookingPayload(BaseModel):
     #: each keeps the vendor they had.
     vendor_id: int | None = None
     notify: bool = True
+    attach_tickets: bool = True
 
     @field_validator("note", "booking_reference")
     @classmethod

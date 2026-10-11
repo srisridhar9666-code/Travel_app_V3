@@ -626,3 +626,29 @@ def send_test(to_address: str) -> dict:
         result["hint"] = hint_for(result["error"], settings)
         logger.warning("Test mail to %s failed at %s: %s", to_address, result["stage"], result["error"])
     return result
+
+
+def set_email_enabled(enabled: bool) -> dict:
+    """Toggle email delivery on or off, updating backend/.env and current process settings."""
+    global _STARTED_AT
+    new_val_str = "true" if enabled else "false"
+    if ENV_FILE.exists():
+        encoding = env_file_encoding(ENV_FILE)
+        try:
+            content = ENV_FILE.read_text(encoding=encoding)
+            pattern = re.compile(r"^EMAIL_ENABLED\s*=.*$", re.MULTILINE | re.IGNORECASE)
+            new_line = f"EMAIL_ENABLED={new_val_str}"
+            if pattern.search(content):
+                new_content = pattern.sub(new_line, content)
+            else:
+                new_content = content.rstrip("\r\n") + f"\n{new_line}\n"
+            ENV_FILE.write_text(new_content, encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Could not persist EMAIL_ENABLED to %s: %s", ENV_FILE, exc)
+
+    os.environ["EMAIL_ENABLED"] = new_val_str
+    get_settings.cache_clear()
+    _STARTED_AT = time.time()
+    logger.info("Email service toggled to %s", "enabled" if enabled else "disabled")
+    return effective_settings()
+

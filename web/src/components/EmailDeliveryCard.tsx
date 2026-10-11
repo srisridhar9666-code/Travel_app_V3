@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, Info, Mail, Send, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Info, Mail, Power, Send, XCircle } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
 
 import { Badge, Button, Card, CardHeader, Input, Skeleton } from '@/components/ui';
-import { errorMessage, fetchEmailStatus, sendTestEmail } from '@/lib/api';
+import { errorMessage, fetchEmailStatus, sendTestEmail, toggleEmailService } from '@/lib/api';
 import { formatInstant } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
@@ -214,6 +214,17 @@ export default function EmailDeliveryCard() {
     },
   });
 
+  const toggleEmail = useMutation({
+    mutationFn: (enabled: boolean) => toggleEmailService(enabled),
+    meta: { errorFallback: 'Could not update email service status.' },
+    onSuccess: (result, enabled) => {
+      toast.success(enabled ? 'Email service enabled' : 'Email service disabled');
+      queryClient.setQueryData(['email-status'], result);
+      queryClient.invalidateQueries({ queryKey: ['email-status'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger'] });
+    },
+  });
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     test.mutate();
@@ -229,13 +240,52 @@ export default function EmailDeliveryCard() {
         description="Whether this server can send email, and a test send to prove it."
         action={
           data ? (
-            <Badge tone={ready ? (data.settings.restart_needed ? 'warning' : 'success') : 'danger'}>
-              {ready ? (data.settings.restart_needed ? 'Restart needed' : 'Set up') : 'Not sending'}
-            </Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant={data.settings.enabled ? 'danger' : 'primary'}
+                loading={toggleEmail.isPending}
+                onClick={() => toggleEmail.mutate(!data.settings.enabled)}
+                title={data.settings.enabled ? 'Disable email service' : 'Enable email service'}
+              >
+                <Power size={13} />
+                {data.settings.enabled ? 'Turn off email service' : 'Turn on email service'}
+              </Button>
+              <Badge tone={ready ? (data.settings.restart_needed ? 'warning' : 'success') : 'danger'}>
+                {ready ? (data.settings.restart_needed ? 'Restart needed' : 'Set up') : 'Not sending'}
+              </Badge>
+            </div>
           ) : undefined
         }
       />
       <div className="space-y-4 px-4 py-4 sm:px-5">
+        {data && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface-sunken p-3.5">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-text">Email Service Master Switch:</span>
+                <Badge tone={data.settings.enabled ? 'success' : 'neutral'}>
+                  {data.settings.enabled ? 'Active / ON' : 'Paused / OFF'}
+                </Badge>
+              </div>
+              <p className="text-xs text-text-muted">
+                {data.settings.enabled
+                  ? 'Email dispatch is active. Approvals, booking confirmations, and reminders are sent via SMTP.'
+                  : 'Email sending is currently turned off. In-app notifications continue as usual.'}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant={data.settings.enabled ? 'danger' : 'primary'}
+              loading={toggleEmail.isPending}
+              onClick={() => toggleEmail.mutate(!data.settings.enabled)}
+            >
+              <Power size={13} />
+              {data.settings.enabled ? 'Turn OFF' : 'Turn ON'}
+            </Button>
+          </div>
+        )}
+
         {status.isPending ? (
           <Skeleton className="h-28 w-full" />
         ) : status.isError ? (

@@ -108,6 +108,7 @@ def remind_travellers(db: Session, tenant_id: str, *, today: date | None = None)
             body=f"Your trip to {where} starts {when}. Reference {reference}."
             + (f" Cab: {car}." if car else ""),
             request_id=request.id,
+            cc_users=[person.active_manager] if person.active_manager else None,
             email_subject=f"Reminder - {where} on {starts.strftime('%d %b')}",
             email_body="\n".join(
                 [

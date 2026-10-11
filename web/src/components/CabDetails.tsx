@@ -1,5 +1,6 @@
-import { CalendarClock, Car, Phone } from 'lucide-react';
+import { CalendarClock, Car } from 'lucide-react';
 
+import { PhoneBadge } from '@/components/PhoneBadge';
 import { Field, Input } from '@/components/ui';
 import { dayTime } from '@/lib/requests';
 import { cn, mobileDigits } from '@/lib/utils';
@@ -15,9 +16,6 @@ import {
  * My requests, where a traveller looks for the plate at the kerb, and on
  * Approvals, where an admin checks what they recorded.
  */
-
-/** "+91 98765 43210" as a dialable link target. */
-const dialable = (phone: string) => `tel:${phone.replace(/[^\d+]/g, '')}`;
 
 export function CabSent({
   request,
@@ -54,14 +52,11 @@ export function CabSent({
           <dt className="text-2xs text-text-subtle">Driver&rsquo;s phone</dt>
           <dd>
             {request.cab_driver_phone && (
-              // A link, so a traveller on a phone taps once to call.
-              <a
-                href={dialable(request.cab_driver_phone)}
-                className="inline-flex items-center gap-1 font-medium text-brand-strong underline-offset-2 hover:underline"
-              >
-                <Phone size={11} />
-                {request.cab_driver_phone}
-              </a>
+              <PhoneBadge
+                phone={request.cab_driver_phone}
+                name={request.cab_driver_name || 'Driver'}
+                size="xs"
+              />
             )}
           </dd>
         </div>

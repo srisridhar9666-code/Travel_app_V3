@@ -23,3 +23,11 @@ export function routeLabel(trip: Routed, separator = ' → '): string {
     trip.drop_city,
   )}`;
 }
+
+export function routeParts(trip: Routed): { origin: string; destination: string } {
+  return {
+    origin: withCity(trip.origin, trip.pickup_city) || '—',
+    destination: withCity(trip.destination, trip.drop_city) || '—',
+  };
+}
+

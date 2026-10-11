@@ -120,7 +120,7 @@ export function TicketFilesModal({
     <Modal
       open
       onClose={onClose}
-      title={`Tickets · #${request.id}`}
+      title={`Tickets · ${request.id}`}
       description={itinerary(request)}
       className="sm:max-w-2xl"
       footer={

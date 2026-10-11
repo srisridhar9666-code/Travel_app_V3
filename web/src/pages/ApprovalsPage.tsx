@@ -40,6 +40,8 @@ import { ConflictList } from '@/components/RequestForm';
 import { RoomAllotment } from '@/components/RoomSharing';
 import CostPanel from '@/components/CostPanel';
 import { formatMoney } from '@/components/charts';
+import { PhoneBadge } from '@/components/PhoneBadge';
+import { RequestTripHighlight } from '@/components/RequestTripHighlight';
 import { TicketFilesModal, fileCount } from '@/components/TicketFiles';
 import { VendorSelect, sharedVendor } from '@/components/VendorSelect';
 import {
@@ -73,7 +75,6 @@ import {
   cabAsked,
   campaignLabel,
   dayTime,
-  itinerary,
   REQUEST_ACCENT,
   revisionField,
   revisionValue,
@@ -185,11 +186,12 @@ const tripTime = (iso: string | null) => (iso ? iso.slice(11, 16) : '');
 const isCab = (r: TravelRequest) => r.request_type === 'LOCAL_CAB';
 
 const COMMON_COLUMNS: ExportColumn[] = [
-  { header: 'Request #', value: (r) => r.id },
+  { header: 'Request ID', value: (r) => r.id },
   // Seeded and very old rows have no submitted_at; created_at is the honest
   // stand-in.
   { header: 'Raised on (IST)', value: (r) => sheetInstant(r.submitted_at ?? r.created_at) },
   { header: 'Raised by', value: (r) => r.requester_name },
+  { header: 'Requester phone', value: (r) => r.requester_phone },
   { header: 'Priority', value: (r) => PRIORITY_LABELS[r.priority] ?? r.priority },
   { header: 'Campaign code', value: (r) => r.project_code },
   { header: 'Campaign', value: (r) => campaignLabel(r) },
@@ -233,12 +235,13 @@ const COMMON_COLUMNS: ExportColumn[] = [
   { header: 'Driver', value: (r) => r.cab_driver_name },
   { header: 'Driver phone', value: (r) => r.cab_driver_phone },
   { header: 'Days extended', value: (r) => (isCab(r) ? r.cab_extended_days : '') },
-  { header: 'Extends request #', value: (r) => r.extends_request_id },
+  { header: 'Extends request ID', value: (r) => r.extends_request_id },
   { header: 'Booked before as', value: (r) => r.previous_booking },
   { header: 'Reason for travel', value: (r) => r.travel_reason },
   { header: 'Notes', value: (r) => r.notes },
   { header: 'Traveller', value: (_, t) => t.full_name },
   { header: 'Traveller email', value: (_, t) => t.email },
+  { header: 'Traveller phone', value: (_, t) => t.phone },
   { header: 'Designation', value: (_, t) => (t.designation ? DESIGNATION_LABELS[t.designation] : '') },
   { header: 'Traveller status', value: (_, t) => TRAVELLER_STATUS_LABELS[t.status] },
   { header: 'Manager', value: (_, t) => t.manager_reviewed_by_name ?? t.manager_name },
@@ -834,6 +837,34 @@ export default function ApprovalsPage() {
   // The fields of a decision (approve, reject, cancel) and its buttons.
   const decisionFields = (
     <>
+      {pending && (
+        <div className="mb-4 space-y-3">
+          <RequestTripHighlight request={pending.request} variant="banner" />
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-surface-sunken p-3">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded bg-brand-soft px-2.5 py-1 text-sm font-semibold text-brand ring-1 ring-inset ring-brand/20">
+                  {pending.traveller.full_name}
+                </span>
+                <span className="text-xs text-text-muted">{pending.traveller.email}</span>
+              </div>
+              {pending.traveller.phone ? (
+                <div className="mt-2 flex items-center gap-1.5 text-xs">
+                  <span className="text-text-muted">Employee phone:</span>
+                  <PhoneBadge
+                    phone={pending.traveller.phone}
+                    name={pending.traveller.full_name}
+                    size="sm"
+                  />
+                </div>
+              ) : (
+                <p className="mt-1 text-2xs text-text-subtle">No phone number on profile</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {pending?.needsOverride && (
         <div className="mb-4">
           <ConflictList
@@ -1078,10 +1109,10 @@ export default function ApprovalsPage() {
                   <CalendarClock size={15} />
                 </div>
                 <div className="min-w-0 flex-1 basis-40">
-                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                  <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
                     <ItemNumber value={request.id} />
-                    {itinerary(request)}
-                  </p>
+                    <RequestTripHighlight request={request} />
+                  </div>
                   <p className="mt-0.5 text-xs text-text-muted">
                     {request.cab_extension_requested_by_name ?? request.requester_name}:{' '}
                     {request.cab_extension_reason}
@@ -1270,7 +1301,7 @@ export default function ApprovalsPage() {
                     <div className="min-w-0 flex-1 basis-40">
                       <div className="flex flex-wrap items-center gap-2">
                         <ItemNumber value={request.id} />
-                        <span className="text-sm font-medium">{itinerary(request)}</span>
+                        <RequestTripHighlight request={request} />
                         <Badge tone={STATUS_TONE[request.status]}>
                           {REQUEST_STATUS_LABELS[request.status]}
                         </Badge>
@@ -1278,13 +1309,13 @@ export default function ApprovalsPage() {
                         {request.extends_request_id != null && (
                           <Badge tone="brand">
                             <CalendarPlus size={11} />
-                            Extends #{request.extends_request_id}
+                            Extends {request.extends_request_id}
                           </Badge>
                         )}
                         {request.extended_by_request_id != null && (
                           <Badge tone="info">
                             <CalendarPlus size={11} />
-                            Extended by #{request.extended_by_request_id}
+                            Extended by {request.extended_by_request_id}
                           </Badge>
                         )}
                         {request.edit_count > 0 && (
@@ -1301,14 +1332,22 @@ export default function ApprovalsPage() {
                         )}
                       </div>
                       <p className="mt-1 text-xs text-text-muted">
-                        {campaignLabel(request)} · raised by {request.requester_name}
+                        {campaignLabel(request)} · raised by{' '}
+                        <span className="font-semibold text-text">{request.requester_name}</span>
+                        {request.requester_phone && (
+                          <span className="ml-1.5 inline-flex items-center">
+                            <PhoneBadge
+                              phone={request.requester_phone}
+                              name={request.requester_name}
+                              size="xs"
+                            />
+                          </span>
+                        )}
                         {/* For a cab, the size and distance the vendor is
                             chosen by, in place of the bare "Cab". */}
                         {cabAsked(request) ? (
                           <span className="font-medium text-text"> · {cabAsked(request)}</span>
-                        ) : (
-                          request.mode && ` · ${TRAVEL_MODE_LABELS[request.mode]}`
-                        )}
+                        ) : null}
                         {request.notes && ` · ${request.notes}`}
                       </p>
                       {request.extends_request_id != null && (
@@ -1378,7 +1417,14 @@ export default function ApprovalsPage() {
                         key={traveller.id}
                         className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2"
                       >
-                        <span className="text-sm font-medium">{traveller.full_name}</span>
+                        <span className="rounded bg-brand-soft px-2 py-0.5 text-sm font-semibold text-brand ring-1 ring-inset ring-brand/20">
+                          {traveller.full_name}
+                        </span>
+                        {traveller.phone ? (
+                          <PhoneBadge phone={traveller.phone} name={traveller.full_name} size="xs" />
+                        ) : (
+                          <span className="text-2xs text-text-subtle">No phone</span>
+                        )}
                         <Badge tone={TRAVELLER_TONE[traveller.status]}>
                           {TRAVELLER_STATUS_LABELS[traveller.status]}
                         </Badge>
@@ -1559,7 +1605,7 @@ export default function ApprovalsPage() {
       <Modal
         open={costFor !== null}
         onClose={() => setCostFor(null)}
-        title={costFor ? `Correct the cost · #${costFor.id}` : ''}
+        title={costFor ? `Correct the cost · ${costFor.id}` : ''}
         description="For a fix after booking. A cost on an approved invoice is locked; one on an invoice still being prepared moves the invoice with it."
         className="sm:max-w-xl"
       >
@@ -1629,7 +1675,7 @@ export default function ApprovalsPage() {
       >
         {cabEditing && cabDraft && (
           <div className="space-y-3">
-            <p className="text-xs text-text-muted">{itinerary(cabEditing)}</p>
+            <RequestTripHighlight request={cabEditing} variant="banner" />
             <CabBookingFields
               draft={cabDraft}
               onChange={setCabDraft}
@@ -1685,9 +1731,9 @@ export default function ApprovalsPage() {
       >
         {extension && (
           <div className="space-y-3">
+            <RequestTripHighlight request={extension.request} variant="banner" />
             <div className="rounded-md bg-surface-sunken px-3 py-2 text-xs">
-              <p className="font-medium">{itinerary(extension.request)}</p>
-              <p className="mt-0.5 text-text-muted">
+              <p className="text-text-muted">
                 {extension.request.cab_extension_requested_by_name ?? extension.request.requester_name}
                 : {extension.request.cab_extension_reason}
               </p>

@@ -299,7 +299,7 @@ export function ItemNumber({ value, className }: { value: number | string; class
         className,
       )}
     >
-      #{value}
+      {value}
     </span>
   );
 }

@@ -24,6 +24,7 @@ import { CancellationNote } from '@/components/CancellationAsks';
 import { ExtendTripModal } from '@/components/ExtendTripModal';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
+import { RequestTripHighlight } from '@/components/RequestTripHighlight';
 import RequestForm, { ConflictList } from '@/components/RequestForm';
 import {
   Badge,
@@ -52,7 +53,6 @@ import {
   submitRequest,
 } from '@/lib/api';
 import { openFileTab, showFile } from '@/lib/files';
-import { routeLabel } from '@/lib/places';
 import {
   REQUEST_ACCENT,
   cabAsked,
@@ -87,32 +87,6 @@ const STATUS_TONE: Record<RequestStatus, 'neutral' | 'info' | 'success' | 'warni
   CANCELLED: 'neutral',
   EXPIRED: 'neutral',
 };
-
-const dayMonth = (iso: string) =>
-  new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso).toLocaleDateString(undefined, {
-    day: '2-digit',
-    month: 'short',
-  });
-
-const dayTime = (iso: string) =>
-  new Date(iso).toLocaleString('en-IN', {
-    hour12: true,
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
-/** One line describing where and when, whatever the request type. */
-function itinerary(request: TravelRequest): string {
-  if (request.request_type === 'HOTEL') {
-    const nights = request.check_out
-      ? `${dayMonth(request.check_in!)} – ${dayMonth(request.check_out)}`
-      : dayMonth(request.check_in!);
-    return `${request.hotel_city} · ${nights}`;
-  }
-  return `${routeLabel(request)} · ${request.start_at ? dayTime(request.start_at) : ''}`;
-}
 
 /** Co-stay offers are not in the list response - they are only actionable on one
  *  request at a time - so an expanded row fetches the detail for them. */
@@ -480,7 +454,7 @@ export default function RequestsPage() {
                     <div className="min-w-0 flex-1 basis-40">
                       <div className="flex flex-wrap items-center gap-2">
                         <ItemNumber value={request.id} />
-                        <span className="text-sm font-medium">{itinerary(request)}</span>
+                        <RequestTripHighlight request={request} />
                         <Badge tone={STATUS_TONE[request.status]}>
                           {REQUEST_STATUS_LABELS[request.status]}
                         </Badge>

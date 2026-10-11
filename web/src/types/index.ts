@@ -449,6 +449,7 @@ export interface RequestTraveller {
   user_id: number;
   full_name: string;
   email: string;
+  phone?: string | null;
   designation: Designation | null;
   status: TravellerStatus;
   is_requester: boolean;
@@ -563,6 +564,7 @@ export interface TravelRequest {
 
   requester_id: number;
   requester_name: string;
+  requester_phone?: string | null;
 
   mode: TravelMode | null;
   origin: string | null;

@@ -205,6 +205,21 @@ def test_the_ticket_confirm_path_attaches_it_too(client, db, trip, outbox):
     assert any(m["attachments"] == ["IndiGo-QK8T2M.pdf"] for m in outbox.messages)
 
 
+def test_the_ticket_confirm_path_can_skip_attachment(client, db, trip, outbox):
+    ticket_id = upload(db, trip)
+    r = client.post(
+        f"/tickets/{ticket_id}/confirm",
+        headers=auth(trip["admin"]),
+        json={"booking_reference": "QK8T2M", "attach_ticket": False},
+    )
+    assert r.status_code == 200, r.text
+    mail = email_for(db, "BOOKING_CONFIRMED")
+    assert mail.attachment_name is None
+    assert "attached" not in mail.body
+    sent = [m for m in outbox.messages if m["to"] == "ravi@designboxed.com"]
+    assert sent and sent[-1]["attachments"] == []
+
+
 def test_notify_keeps_the_file_for_a_retry(db, trip):
     person = db.get(User, trip["ravi"].id)
     rows = notifications.notify(

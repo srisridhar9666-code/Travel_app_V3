@@ -7,6 +7,7 @@ import { CancellationAsks } from '@/components/CancellationAsks';
 import { ManagerReview } from '@/components/ManagerReview';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
+import { RequestTripHighlight } from '@/components/RequestTripHighlight';
 import { ConflictList } from '@/components/RequestForm';
 import {
   Badge,
@@ -21,7 +22,7 @@ import {
   Skeleton,
 } from '@/components/ui';
 import { errorMessage, fetchTeamReviews, recommendRequest } from '@/lib/api';
-import { cabAsked, campaignLabel, itinerary, REQUEST_ACCENT } from '@/lib/requests';
+import { cabAsked, campaignLabel, REQUEST_ACCENT } from '@/lib/requests';
 import { formatInstant } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
@@ -221,7 +222,7 @@ export default function TeamApprovalsPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <ItemNumber value={request.id} />
-                        <span className="text-sm font-medium">{itinerary(request)}</span>
+                        <RequestTripHighlight request={request} />
                         <Badge tone={request.status === 'SUBMITTED' ? 'info' : 'neutral'}>
                           {REQUEST_STATUS_LABELS[request.status]}
                         </Badge>
@@ -355,10 +356,14 @@ export default function TeamApprovalsPage() {
       >
         <div className="space-y-4">
           {draft && (
-            <p className="rounded-md bg-surface-sunken px-3 py-2 text-xs text-text-muted">
-              <span className="font-medium text-text">{itinerary(draft.request)}</span>
-              {draft.request.travel_reason && ` - ${draft.request.travel_reason}`}
-            </p>
+            <div className="space-y-2">
+              <RequestTripHighlight request={draft.request} variant="banner" />
+              {draft.request.travel_reason && (
+                <p className="rounded-md bg-surface-sunken px-3 py-2 text-xs text-text-muted">
+                  <span className="font-medium text-text">Reason:</span> {draft.request.travel_reason}
+                </p>
+              )}
+            </div>
           )}
 
           {draft && draft.team.length > 1 && (
