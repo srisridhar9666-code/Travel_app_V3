@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.deps import AdminUser, CurrentUser, DbSession
-from app.core.enums import AuditAction, Role, TokenPurpose, UserStatus
+from app.core.enums import AuditAction, HotelOccupancy, Role, TokenPurpose, UserStatus
 from app.models.base import naive_utcnow
 from app.models.department import Department
 from app.models.user import User
@@ -69,6 +69,14 @@ def _to_read(user: User) -> UserRead:
         department_name=user.department_name,
         manager_id=user.manager_id,
         manager_name=user.manager_name,
+        vendor_id=user.vendor_id,
+        vendor_name=user.vendor_name,
+        hotel_occupancy_entitlement=getattr(user, "hotel_occupancy_entitlement", HotelOccupancy.SINGLE) or HotelOccupancy.SINGLE,
+        upi_id=getattr(user, "upi_id", None),
+        bank_name=getattr(user, "bank_name", None),
+        bank_account_number=getattr(user, "bank_account_number", None),
+        account_holder_name=getattr(user, "account_holder_name", None),
+        ifsc_code=getattr(user, "ifsc_code", None),
         status=user.status,
         status_changed_at=user.status_changed_at,
         is_active=user.is_active,
@@ -265,7 +273,13 @@ def invite_account(
     _guard_role_assignment(actor, payload.role)
     _email_taken(db, actor.tenant_id, payload.email)
     accounts.assert_phone_free(db, actor.tenant_id, payload.phone)
-    _check_department(db, actor, payload.department_id)
+    department_id = payload.department_id
+    if department_id is None and payload.manager_id is not None:
+        mgr = db.get(User, payload.manager_id)
+        if mgr and mgr.department_id is not None:
+            department_id = mgr.department_id
+
+    _check_department(db, actor, department_id)
     _check_manager(db, actor, payload.manager_id, payload.role)
     # "hyd" under Telangana is stored as Hyderabad, as a request's places are.
     base_state, base_location = locations.canonical(
@@ -283,8 +297,10 @@ def invite_account(
         employee_code=payload.employee_code,
         base_state=base_state,
         base_location=base_location,
-        department_id=payload.department_id,
+        department_id=department_id,
         manager_id=payload.manager_id,
+        vendor_id=payload.vendor_id,
+        hotel_occupancy_entitlement=payload.hotel_occupancy_entitlement,
         password_hash=None,  # set by the invitee, never by the admin
         created_by_id=actor.id,
     )

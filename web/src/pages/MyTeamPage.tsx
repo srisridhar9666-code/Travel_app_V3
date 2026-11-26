@@ -31,6 +31,7 @@ import {
   fetchMyTeam,
   fetchRequests,
   fetchTeamChanges,
+  updateMemberOccupancy,
   withdrawTeamChange,
   type TeamAddPayload,
 } from '@/lib/api';
@@ -45,6 +46,7 @@ import {
   SELECTABLE_GENDERS,
   USER_STATUS_LABELS,
   type Designation,
+  type HotelOccupancy,
   type TeamChange,
   type TeamChangeStatus,
   type TravelRequest,
@@ -63,6 +65,7 @@ const BLANK_ADD: TeamAddPayload = {
   employee_code: '',
   base_state: '',
   base_location: '',
+  hotel_occupancy_entitlement: 'SINGLE',
   note: '',
 };
 
@@ -73,6 +76,7 @@ interface EditDraft {
   employee_code: string;
   base_state: string;
   base_location: string;
+  hotel_occupancy_entitlement: HotelOccupancy;
   note: string;
 }
 
@@ -164,6 +168,7 @@ export default function MyTeamPage() {
         employee_code: d.employee_code.trim() || null,
         base_state: d.base_state || null,
         base_location: d.base_location || null,
+        hotel_occupancy_entitlement: d.hotel_occupancy_entitlement,
         note: d.note.trim() || null,
       });
     },
@@ -196,6 +201,18 @@ export default function MyTeamPage() {
     },
   });
 
+  const updateOccupancy = useMutation({
+    mutationFn: ({ userId, entitlement }: { userId: number; entitlement: HotelOccupancy }) =>
+      updateMemberOccupancy(userId, entitlement),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ['my-team'] });
+      toast.success(
+        `Updated ${updated.full_name} to ${updated.hotel_occupancy_entitlement === 'DOUBLE' ? 'Double' : 'Single'} Occupancy for all bookings`
+      );
+    },
+    onError: (err) => toast.error(errorMessage(err, 'Could not update occupancy entitlement.')),
+  });
+
   const openEdit = (member: UserRow) => {
     setEditing(member);
     setEditDraft({
@@ -205,6 +222,7 @@ export default function MyTeamPage() {
       employee_code: member.employee_code ?? '',
       base_state: member.base_state ?? '',
       base_location: member.base_location ?? '',
+      hotel_occupancy_entitlement: member.hotel_occupancy_entitlement ?? 'SINGLE',
       note: '',
     });
     setFormError(null);
@@ -280,8 +298,9 @@ export default function MyTeamPage() {
                 <tr className="border-b border-border text-left text-2xs uppercase tracking-widest text-text-subtle">
                   <th className="px-5 py-2.5 font-semibold">Name</th>
                   <th className="hidden px-5 py-2.5 font-semibold md:table-cell">Designation</th>
+                  <th className="hidden px-5 py-2.5 font-semibold sm:table-cell">Occupancy Entitlement</th>
                   <th className="hidden px-5 py-2.5 font-semibold lg:table-cell">Base</th>
-                  <th className="hidden px-5 py-2.5 font-semibold sm:table-cell">Phone</th>
+                  <th className="hidden px-5 py-2.5 font-semibold xl:table-cell">Phone</th>
                   <th className="px-5 py-2.5 font-semibold">Status</th>
                   <th className="px-5 py-2.5 text-right font-semibold">Actions</th>
                 </tr>
@@ -298,10 +317,31 @@ export default function MyTeamPage() {
                       <td className="hidden px-5 py-3 text-text-muted md:table-cell">
                         {member.designation ? DESIGNATION_LABELS[member.designation] : '—'}
                       </td>
+                      <td className="hidden px-5 py-3 sm:table-cell">
+                        <select
+                          className={cn(
+                            "rounded-md border px-2.5 py-1 text-xs font-semibold shadow-xs transition cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/20",
+                            member.hotel_occupancy_entitlement === 'DOUBLE'
+                              ? "border-purple-300 bg-purple-50 text-purple-700 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-300"
+                              : "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
+                          )}
+                          value={member.hotel_occupancy_entitlement ?? 'SINGLE'}
+                          onChange={(e) =>
+                            updateOccupancy.mutate({
+                              userId: member.id,
+                              entitlement: e.target.value as HotelOccupancy,
+                            })
+                          }
+                          title="Manager Occupancy Evaluation: governs all hotel bookings for this employee"
+                        >
+                          <option value="SINGLE">Single Occupancy</option>
+                          <option value="DOUBLE">Double Occupancy</option>
+                        </select>
+                      </td>
                       <td className="hidden px-5 py-3 text-text-muted lg:table-cell">
                         {[member.base_location, member.base_state].filter(Boolean).join(', ') || '—'}
                       </td>
-                      <td className="hidden px-5 py-3 text-text-muted sm:table-cell">
+                      <td className="hidden px-5 py-3 text-text-muted xl:table-cell">
                         {member.phone || '—'}
                       </td>
                       <td className="px-5 py-3">
@@ -595,6 +635,25 @@ export default function MyTeamPage() {
                     {DESIGNATION_LABELS[d]}
                   </option>
                 ))}
+              </Select>
+            </Field>
+            <Field
+              label="Occupancy Entitlement"
+              htmlFor="edit_member_occupancy"
+              hint="Single (Default) vs Double"
+            >
+              <Select
+                id="edit_member_occupancy"
+                value={editDraft.hotel_occupancy_entitlement}
+                onChange={(e) =>
+                  setEditDraft({
+                    ...editDraft,
+                    hotel_occupancy_entitlement: e.target.value as HotelOccupancy,
+                  })
+                }
+              >
+                <option value="SINGLE">Single Occupancy (Default)</option>
+                <option value="DOUBLE">Double Occupancy</option>
               </Select>
             </Field>
             <Field label="Phone" htmlFor="edit_member_phone" hint={MOBILE_HINT}>

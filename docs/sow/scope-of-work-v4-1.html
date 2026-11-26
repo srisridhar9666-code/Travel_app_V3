@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Scope of Work v4.1 - Sriyatra Field Logistics, Travel Management &amp; Reimbursement System</title>
+<style>
+  @page { size: A4; margin: 14mm 14mm 16mm 14mm; }
+  :root {
+    --ink: #0f172a;
+    --muted: #475569;
+    --line: #cbd5e1;
+    --brand: #0b3fa8;
+    --brand-dark: #072970;
+    --soft: #f8fafc;
+    --card: #ffffff;
+    --highlight: #e0e7ff;
+    --success: #059669;
+    --warning: #d97706;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    color: var(--ink);
+    font-size: 9.3pt;
+    line-height: 1.45;
+    margin: 0;
+    padding: 16px;
+    background: #fff;
+  }
+  header.cover {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 2.5px solid var(--brand);
+    padding-bottom: 12px;
+    margin-bottom: 14px;
+  }
+  header.cover .brand { display: flex; align-items: center; gap: 12px; }
+  header.cover .brand img.mark { height: 46px; }
+  header.cover .brand img.word { height: 40px; }
+  header.cover .company { text-align: right; font-size: 9pt; color: var(--muted); font-weight: 500; }
+  header.cover .company img { height: 38px; display: block; margin-left: auto; margin-bottom: 4px; }
+
+  h1 { font-size: 18pt; margin: 6px 0 2px; color: var(--brand-dark); letter-spacing: -0.02em; }
+  .subtitle { color: var(--muted); margin: 0 0 12px; font-size: 10.5pt; font-weight: 500; }
+
+  .meta {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    background: var(--soft);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 8.8pt;
+    margin-bottom: 14px;
+  }
+  .meta b { display: block; font-size: 7.2pt; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 2px; }
+
+  h2 {
+    font-size: 11.6pt;
+    color: var(--brand);
+    margin: 18px 0 8px;
+    padding-top: 6px;
+    border-top: 1.5px solid var(--line);
+    break-after: avoid;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  h3 { font-size: 9.8pt; margin: 10px 0 4px; color: #1e293b; break-after: avoid; }
+  p { margin: 4px 0 6px; }
+  ul { margin: 3px 0 6px 0; padding-left: 20px; }
+  li { margin: 2.5px 0; }
+  li ul { margin-top: 2px; }
+
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 8.5pt; break-inside: auto; }
+  th, td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #f1f5f9; font-weight: 700; color: #1e293b; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  tr:nth-child(even) td { background: #fafafa; }
+
+  .highlight-box {
+    background: #f0f7ff;
+    border-left: 4px solid var(--brand);
+    padding: 8px 12px;
+    margin: 8px 0 12px;
+    border-radius: 0 6px 6px 0;
+    font-size: 8.8pt;
+    color: #1e3a8a;
+  }
+
+  .flowchart-container {
+    background: var(--soft);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 8px 0 12px;
+  }
+  .flow-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .flow-step:last-child { margin-bottom: 0; }
+  .step-num {
+    background: var(--brand);
+    color: #fff;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8pt;
+    font-weight: 700;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .step-content { flex: 1; }
+  .step-title { font-weight: 700; color: #1e293b; font-size: 8.9pt; }
+  .step-desc { color: var(--muted); font-size: 8.3pt; }
+
+  footer.sign {
+    margin-top: 20px;
+    border-top: 1.5px solid var(--line);
+    padding-top: 8px;
+    font-size: 8.4pt;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+
+<header class="cover">
+  <div class="brand">
+    <img class="mark" src="../../web/public/brand/mark.png" alt="" />
+    <img class="word" src="../../web/public/brand/wordmark-light.png" alt="Sriyatra - Your Travel Desk" />
+  </div>
+  <div class="company">
+    <img src="../../web/public/brand/company-logo-light.png" alt="DesignBoxed" />
+    DesignBoxed Innovations Pvt. Ltd.
+  </div>
+</header>
+
+<h1>Scope of Work (SOW): Field Logistics &amp; Travel Management System</h1>
+<p class="subtitle">Sriyatra &middot; Master Unified Platform Specification (Version 4.1)</p>
+
+<div class="meta">
+  <div><b>Version</b>4.1 (Master Specification)</div>
+  <div><b>Date</b>November 2026</div>
+  <div><b>Company</b>DesignBoxed Innovations Pvt. Ltd.</div>
+  <div><b>Prepared by</b>Menthyala Sridhar</div>
+</div>
+
+<p>
+  This document represents the complete, fresh, and unified Master Scope of Work for <b>Sriyatra</b>, the enterprise field logistics, travel fulfillment, vehicle operations, and employee expense reimbursement platform for <b>DesignBoxed Innovations Pvt. Ltd.</b> It provides a comprehensive, end-to-end specification of all system capabilities, workflows, user roles, policies, and extended operational features.
+</p>
+
+<div class="highlight-box">
+  <b>Platform Architecture Overview:</b>
+  (1) Six discrete role portals, (2) Universal mandatory two-tier approval (Manager &rarr; Admin &rarr; Vendor), (3) Full Campaign and Team management by Managers, (4) Hotel occupancy evaluation (Single vs. Double default and user profile entitlement), (5) Saved Hotels Directory with auto-save &amp; vendor proposals, (6) Exact same-gender co-stay matching, (7) Manual hotel check-in/out verification, (8) Daily cab hire telemetry with start/end meter photos, auto-timestamps, and reverse geocoding, (9) Telemetry policy governance with missed-photo regularization and booking locks, (10) Comprehensive expense reimbursements with food flat ₹400/day across all cities, manager endorsement, and finance settlement, (11) Vendor portal invoicing with Finance pre-verification and Super Admin approval, (12) In-app contextual bug reporting system, (13) Tamper-evident cryptographic audit logging.
+</div>
+
+<h2>1. User Hierarchy &amp; Role-Based Access Control (RBAC)</h2>
+<p>
+  The platform establishes six distinct, ranked user tiers, each with dedicated login credentials, scoped views, operational queues, and permission boundaries:
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:20%">Role</th>
+      <th style="width:25%">User Type</th>
+      <th>Key Responsibilities &amp; Permissions</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>1. Users (Ground Staff)</b></td>
+      <td>Field personnel &amp; team members (~100 staff)</td>
+      <td>Raise requests for Flights, Trains, Buses, Cabs, and Hotels; choose hotel from vendor proposals; select room-sharing with same-gender colleagues; perform manual hotel check-in/out; upload cab start/end odometer photos; submit reimbursement claims with bills (Food flat ₹400/day, transit/auto, tolls/parking); submit in-app bug reports with screen context.</td>
+    </tr>
+    <tr>
+      <td><b>2. Managers</b></td>
+      <td>Field Managers &amp; Team Leads</td>
+      <td><b>Mandatory Level-1 Approver</b> for all team requests; <b>Full Campaign Control</b> (create, edit, pause, delete campaigns); <b>Full Team Control</b> (add, edit, delete team members); evaluate Single vs. Double hotel occupancy; review and endorse team reimbursement claims; inspect team rosters and itineraries; authority to unlock telemetry missed-photo locks.</td>
+    </tr>
+    <tr>
+      <td><b>3. Vendors</b></td>
+      <td>Contracted travel agents, hotel partners, cab fleets</td>
+      <td>Dedicated portal; receives approved bookings; proposes 2&ndash;5 hotel options with addresses/amenities (or quick-select from Saved Hotels Directory); assigns vehicle/driver for cabs; uploads booking vouchers and e-tickets; queries eligible un-invoiced trips and submits vendor invoices.</td>
+    </tr>
+    <tr>
+      <td><b>4. Finance Team</b></td>
+      <td>Accounts &amp; Finance Officers</td>
+      <td>Dedicated audit queue for employee reimbursement claims; enforces policy rate caps (Food flat ₹400/day); approves/partially approves/rejects claims; issues disbursements and records bank UTR/transaction references; pre-verifies vendor invoices against cab telemetry KM and hotel folio bills.</td>
+    </tr>
+    <tr>
+      <td><b>5. Admin</b></td>
+      <td>Operations &amp; Travel Desk (~10 staff)</td>
+      <td><b>Mandatory Level-2 Approver</b>; confirms occupancy decisions; dispatches approved requests to vendors; manages Saved Hotels Directory, Tenant Settings, departments, and city tier policies; manages bug reports; direct booking fallback via Gemini AI.</td>
+    </tr>
+    <tr>
+      <td><b>6. Super Admin</b></td>
+      <td>Executive Leadership</td>
+      <td>System governance; final sign-off on Finance-verified vendor invoices; user role administration; configuration of policy limits and city categories; tamper-evident audit ledger inspection and data purge schedules.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>1.1 Sign-In, Accounts &amp; Security</h3>
+<ul>
+  <li><b>No Self-Registration:</b> All user accounts are provisioned by an administrator. Single-use invitation link (valid 72 hours) dispatched via email or shared over WhatsApp/SMS.</li>
+  <li><b>Password Policy:</b> Minimum 10 characters. Self-service reset link valid for 2 hours. 5 consecutive incorrect attempts lock the account for 15 minutes. Sessions last 8 hours.</li>
+  <li><b>Tab Isolation:</b> Browser tabs maintain independent sessions, allowing administrators to test employee-facing workflows concurrently.</li>
+  <li><b>Theme &amp; Devices:</b> Native Light, Dark, or System theme persisted per user across all devices. Mobile-first responsive layout with full desktop view option on mobile devices.</li>
+  <li><b>Request Sorting:</b> Request queues strictly display the newest requests first (descending ID).</li>
+</ul>
+
+<h2>2. Campaign &amp; Project Management</h2>
+<ul>
+  <li><b>Full Campaign Lifecycle Control:</b> Managers and Admins have complete control to <b>create, edit, pause, complete, and delete campaigns</b>. Campaigns with historical requests can be archived or restored.</li>
+  <li><b>Automated Campaign Codes:</b> Generated automatically in the format <code>CMP-YYYY-NNNN</code> and cannot be manually edited.</li>
+  <li><b>Mandatory Request Tagging:</b> Every travel, cab, hotel, and reimbursement request must be tagged to an active campaign. An emergency option (*"Other - not yet listed"*) allows typing a campaign title so field work is never blocked.</li>
+  <li><b>Campaign Financials:</b> Real-time analytics on deployed staff, booked journeys, hotel nights, and total spend (travel, cab, hotel, reimbursements) per campaign.</li>
+  <li><b>Departments Master:</b> Admins maintain department hierarchies for cross-departmental cost filtering.</li>
+</ul>
+
+<h2>3. Team Management &amp; Organizational Hierarchy</h2>
+<ul>
+  <li><b>Single-Tier Hierarchy:</b> Each ground staff member reports to one manager (*"Reports to"*). Reassignment occurs seamlessly if a manager leaves or changes role.</li>
+  <li><b>Autonomous Team Control for Managers:</b> Within the Manager Portal (*"My Team"*), managers directly <b>add new members, edit member details, and remove/delete members</b> from their roster.</li>
+  <li><b>Field Designations:</b> Standard designations — <b>Executive</b>, <b>Team Lead (TL)</b>, and <b>Manager</b> — define operational hierarchy and reporting structure.</li>
+  <li><b>Hotel Occupancy Entitlement:</b> Configurable on user profiles (<code>SINGLE</code> or <code>DOUBLE</code>), enabling tailored default stay privileges.</li>
+</ul>
+
+<h2>4. Corporate Travel Policies &amp; Financial Governance</h2>
+<p>
+  The system embeds and automatically validates the corporate travel regulations of <b>DesignBoxed Innovations Pvt. Ltd.</b>:
+</p>
+<ul>
+  <li><b>Mode &amp; Class Rules:</b>
+    <ul>
+      <li>8 hours or less: Train 3rd AC / AC Bus / Volvo.</li>
+      <li>More than 8 hours or &gt; 500 km: Flight (Economy Class).</li>
+      <li>Flight, train, and bus bookings follow the identical mandatory manager &rarr; admin &rarr; vendor workflow as hotels and cabs.</li>
+    </ul>
+  </li>
+  <li><b>Lodging Ceilings (Exclusive of Taxes):</b></li>
+</ul>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:20%">City Category</th>
+      <th>Cities Included</th>
+      <th style="width:16%">Single Occupancy</th>
+      <th style="width:16%">Double Occupancy</th>
+      <th style="width:16%">Triple Occupancy</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>Category A</b></td>
+      <td>Mumbai, Delhi, Kolkata, Chennai, Bengaluru, Hyderabad</td>
+      <td>Up to ₹1,500 / night</td>
+      <td>Up to ₹2,000 / night</td>
+      <td>Up to ₹2,500 / night</td>
+    </tr>
+    <tr>
+      <td><b>Category B</b></td>
+      <td>Amravati, Itanagar, Dispur, Patna, Raipur, Panaji, Gandhinagar, Chandigarh, Shimla, Ranchi, Thiruvananthapuram, Bhopal, Imphal, Shillong, Aizawl, Guwahati, Kohima, Bhubaneswar, Jaipur, Gangtok, Agartala, Lucknow, Dehradun</td>
+      <td>Up to ₹1,000 / night</td>
+      <td>Up to ₹1,500 / night</td>
+      <td>Up to ₹2,000 / night</td>
+    </tr>
+    <tr>
+      <td><b>Category C</b></td>
+      <td>All other remaining cities and rural districts</td>
+      <td>Up to ₹750 / night</td>
+      <td>Up to ₹1,200 / night</td>
+      <td>Up to ₹1,500 / night</td>
+    </tr>
+  </tbody>
+</table>
+
+<ul>
+  <li><b>Daily Food Allowance (Employee incurred, claimed via reimbursement):</b>
+    Flat rate of <b>₹400 / day across all cities</b>. Actual itemized food bills required.
+  </li>
+  <li><b>Local Public Conveyance:</b>
+    Auto/rickshaw up to <b>₹150 / day</b> without bills; amounts above ₹150 require receipts. Cabs reimbursed at actuals with receipts. Tolls and parking reimbursed at actuals with receipts.
+  </li>
+</ul>
+
+<h2>5. Request Management (Field Employees)</h2>
+<ul>
+  <li><b>Multi-Category Request Form:</b> Long-distance travel (Flight, Train, Bus), Cabs, and Hotels.</li>
+  <li><b>Group Requests &amp; Co-Travelers:</b> One employee can raise a request for a team by tagging colleagues. Each traveler forms an independent decision row.</li>
+  <li><b>Edit Window:</b> A request remains freely editable while all travelers are in <code>PENDING</code> status. Once any manager/admin action occurs, the request locks. Every edit writes a revision diff.</li>
+  <li><b>Conflict Detection:</b> Checks proposed dates against existing itineraries (hotel by night, journey by closed window, cab sharing day with flight/train is exempt). Clashing requests warn the user; approvers must enter an audited justification to override.</li>
+  <li><b>Cancellations &amp; Extensions:</b> Immediate self-cancellation before decisions; formal *"Ask to Cancel"* after approval/booking. Cabs can be extended by an additional day upon administrative approval.</li>
+</ul>
+
+<h2>6. Universal Mandatory Two-Tier Approval Pipeline</h2>
+<p>
+  Every booking request (Flight, Train, Bus, Cab, Hotel) must complete a mandatory two-step approval before being dispatched to vendors:
+</p>
+
+<div class="flowchart-container">
+  <div class="flow-step">
+    <div class="step-num">1</div>
+    <div class="step-content">
+      <div class="step-title">Ground Staff Submits Request</div>
+      <div class="step-desc">Request is linked to an active campaign with destination, dates, travel reason, and urgency. For hotels, default requested occupancy is Single.</div>
+    </div>
+  </div>
+  <div class="flow-step">
+    <div class="step-num">2</div>
+    <div class="step-content">
+      <div class="step-title">Level-1: Manager Approval (Strictly Mandatory)</div>
+      <div class="step-desc">The employee's manager reviews the request. For hotels, the manager determines Single or Double occupancy eligibility. Manager approves or rejects with comments, auto-stamping <code>manager_reviewed_at</code>.</div>
+    </div>
+  </div>
+  <div class="flow-step">
+    <div class="step-num">3</div>
+    <div class="step-content">
+      <div class="step-title">Level-2: Admin Approval</div>
+      <div class="step-desc">Admin reviews the manager-approved request, validates policy compliance, confirms/overrides occupancy, and grants final approval with a logged reason.</div>
+    </div>
+  </div>
+  <div class="flow-step">
+    <div class="step-num">4</div>
+    <div class="step-content">
+      <div class="step-title">Vendor Dispatch &amp; Fulfilment</div>
+      <div class="step-desc">Request is routed to the designated Vendor portal to initiate hotel option submission, cab driver assignment, or flight/train ticket booking.</div>
+    </div>
+  </div>
+</div>
+
+<h2>7. Hotel Sourcing, Occupancy &amp; Saved Hotels Directory</h2>
+<ul>
+  <li><b>Occupancy Decision:</b> Defaults to <b>Single Occupancy</b> (or user profile entitlement). Evaluated by Manager or Admin based on seniority, campaign budget, or paired travel. Enforces city rate caps.</li>
+  <li><b>Saved Hotels Directory:</b> Central directory of pre-contracted hotels with verified amenities, standard room rates, address, and landmark. Vendors or admins can auto-fill options with one click.</li>
+  <li><b>Vendor Hotel Proposals &amp; Auto-Save:</b> Vendor submits <b>2 to 5 available hotel options</b> in the destination city. Any newly proposed hotel is automatically saved to the master directory.</li>
+  <li><b>Employee Selection:</b> The employee receives a notification and selects their preferred hotel from the vendor's proposals.</li>
+  <li><b>Same-Gender Room Sharing Engine:</b>
+    If Double Occupancy is active, the system queries colleagues staying at that <b>exact hotel</b> during <b>overlapping dates</b>.
+    <ul>
+      <li><b>Strict Safety Filter:</b> Only colleagues of the <b>identical gender</b> (Male with Male, Female with Female) are displayed. Cross-gender pairing is strictly prohibited.</li>
+      <li>Employee selects roommate, opts for an individual room (if eligible), or requests Admin allotment.</li>
+    </ul>
+  </li>
+</ul>
+
+<h2>8. In-Transit &amp; On-Site Verification Telemetry</h2>
+<h3>8.1 Daily Cab Hire Telemetry (Whole-Day Dedicated Cab)</h3>
+<p>
+  Cabs are deployed on a <b>whole-day basis</b> where the car remains dedicated to the employee throughout their working hours. Typically, <b>start location and drop location are identical</b> (hotel in morning &rarr; field duties &rarr; hotel in evening):
+</p>
+<div class="flowchart-container">
+  <div class="flow-step">
+    <div class="step-num">A</div>
+    <div class="step-content">
+      <div class="step-title">Morning Start of Day: Meter Photo &amp; Timestamp</div>
+      <div class="step-desc">When meeting the cab at the hotel, the employee clicks <b>Start Trip</b>, captures an odometer photo (live camera or upload), and enters starting KM. The system auto-captures non-editable IST timestamp, GPS, and reverse-geocoded location name.</div>
+    </div>
+  </div>
+  <div class="flow-step">
+    <div class="step-num">B</div>
+    <div class="step-content">
+      <div class="step-title">Evening End of Day: Meter Photo &amp; Timestamp</div>
+      <div class="step-desc">Upon returning to the hotel at the conclusion of field work, the employee clicks <b>End Trip</b>, captures the final odometer photo, and enters ending KM. The system auto-captures departure timestamp, GPS, and location name.</div>
+    </div>
+  </div>
+  <div class="flow-step">
+    <div class="step-num">C</div>
+    <div class="step-content">
+      <div class="step-title">Automated Telemetry Audit</div>
+      <div class="step-desc">The system computes <b>Total Distance = End KM &minus; Start KM</b> and <b>Duration = End Time &minus; Start Time</b>. Both meter photos, location names, and readings are displayed side-by-side in Admin and Finance screens to audit against vendor invoices.</div>
+    </div>
+  </div>
+</div>
+
+<h3>8.2 Manual Hotel Check-In / Check-Out Verification</h3>
+<ul>
+  <li><b>Manual Check-In:</b> Upon arrival at the hotel, the employee clicks <b>Check-In</b>. The system records arrival timestamp (IST), GPS coordinates, and location name. The employee enters their assigned room number.</li>
+  <li><b>Manual Check-Out:</b> On departure, the employee clicks <b>Check-Out</b>, auto-capturing departure time and GPS. The employee uploads a photo of the <b>Final Hotel Folio / Bill</b> (confirming company entity name and employee name).</li>
+  <li><b>Reimbursement Prompt:</b> Submitting check-out prompts the employee to raise food or local conveyance reimbursement for the completed stay.</li>
+</ul>
+
+<h3>8.3 Telemetry Policy Governance &amp; Booking Locks</h3>
+<ul>
+  <li><b>Tenant Policy Settings:</b> Organization-wide settings govern <code>require_telemetry_checkout</code> and <code>max_monthly_missed_photos</code> (default: 5).</li>
+  <li><b>Booking Lock:</b> If an employee exceeds the monthly missed checkout/telemetry threshold, the system blocks them from booking subsequent trips.</li>
+  <li><b>Manager / Admin Unlock:</b> Managers or Operations Admins can force-close unclosed trips or unlock employees with an audited reason.</li>
+  <li><b>Live Telemetry Badges:</b> Requests display real-time status badges for <code>hotel_verification_status</code> and <code>cab_telemetry_status</code>.</li>
+</ul>
+
+<h2>9. Post-Travel Expense Reimbursement Module</h2>
+<p>
+  Company directly books and pays for intercity travel and hotels. Daily food, parking, tolls, and local public transit are incurred directly by the employee and reimbursed under policy caps:
+</p>
+
+<ul>
+  <li><b>Eligible Categories:</b>
+    <ul>
+      <li><b>Daily Food Allowance:</b> Flat rate of <b>₹400 / day across all cities</b>. Itemized food bills mandatory.</li>
+      <li><b>Local Transit:</b> Metered auto/rickshaw up to ₹150/day without bills; claims &gt; ₹150 require receipts. Tolls and parking reimbursed at actuals.</li>
+      <li><b>Miscellaneous Field Expenses:</b> Incidental field work supplies with receipts and written justification.</li>
+    </ul>
+  </li>
+  <li><b>Comprehensive Reimbursement Form:</b>
+    <ul>
+      <li><b>Header Details:</b> Claim ID (<code>EXP-YYYY-NNNN</code>), employee name/code, department, linked campaign, linked travel booking ID, destination city, travel date range.</li>
+      <li><b>Payment Context:</b> Employee payment mode (<code>ONLINE</code> or <code>CASH</code>), expense classification (<code>FOOD</code>, <code>TRAVEL</code>, <code>OTHERS</code>), remarks.</li>
+      <li><b>Payout Bank / UPI Details:</b> UPI ID, Bank Name, Account Number, Account Holder Name, IFSC Code, and consolidated bill upload.</li>
+      <li><b>Itemized Lines:</b> Date, category, vendor name, bill number, claimed amount, receipt upload.</li>
+      <li><b>Manager Endorsement:</b> Manager records review notes, timestamp, and sets <code>manager_endorsed = True</code>.</li>
+      <li><b>Finance Audit &amp; Settlement:</b> Finance team verifies receipts against policy limits, enters deduction notes, records payment date, mode (NEFT/RTGS/UPI), and <b>Bank Transaction UTR Number</b>, marking the claim <code>SETTLED</code>.</li>
+      <li><b>CSV Import/Export:</b> Full spreadsheet export and bulk import support.</li>
+    </ul>
+  </li>
+</ul>
+
+<h2>10. Fulfillment, Ticketing &amp; AI Extraction</h2>
+<ul>
+  <li><b>Action Queue:</b> Segmented tabs for Awaiting, Partially Approved, Approved, Ready for Vendor, Booked, Rejected, and Cancelled. Sorted strictly newest first.</li>
+  <li><b>Vendor Portal Fulfillment:</b> Hotel vendors submit room options (with Saved Hotel selection) and final vouchers; Cab vendors record car and driver details; Ticketing partners upload confirmed e-tickets.</li>
+  <li><b>Direct Admin Booking &amp; Gemini AI Extraction:</b> For direct desk bookings, admins upload raw tickets/vouchers. Google Gemini AI parses PNR, carrier, flight/train numbers, dates, times, and hotel names. Configurable via Tenant Settings (<code>ai_ticket_autofill_enabled</code>). Details are pre-filled for administrative check; the model never auto-books on its own.</li>
+  <li><b>Ticket Delivery:</b> Booking emails carry the confirmed ticket as an attachment (manager in CC). Employees can download their tickets from My Requests at any time.</li>
+</ul>
+
+<h2>11. Vendor Invoicing &amp; Multi-Tier Verification</h2>
+<ul>
+  <li><b>Vendor Portal Invoicing:</b> Contracted vendors query eligible completed trips (<code>/invoices/eligible</code>) for their assigned vendor ID in a given period and compile invoice <code>INV-YYYY-NNNN</code>. Total is calculated strictly from verified trip costs.</li>
+  <li><b>Finance Pre-Verification:</b> Finance Officer audits the submitted invoice against actual cab telemetry photos and hotel folio bills, recording an audited verification comment (<code>/invoices/{id}/verify</code>).</li>
+  <li><b>Super Admin Final Approval:</b> Super Admin approves invoice (<code>/invoices/{id}/approve</code>), freezing costs and locking trips from duplicate billing. Downloadable as CSV or printable PDF.</li>
+</ul>
+
+<h2>12. Employee Management &amp; Profiles</h2>
+<ul>
+  <li><b>Team Directory:</b> Comprehensive employee roster with CSV bulk import and preview. Fields: Name, Email, Mobile (unique 10-digit), Role, Designation, Department, Reports-To Manager, Base Location, Gender, Hotel Occupancy Entitlement (<code>SINGLE</code> / <code>DOUBLE</code>), Employee Code, and Status.</li>
+  <li><b>Identity Documents &amp; Encryption:</b> Aadhaar, PAN, Passport numbers stored with Fernet AES-256 encryption. Scans stored outside the web root. Viewing sensitive data writes an audited <code>VIEW_SENSITIVE</code> row. Automatic 90-day post-exit purge.</li>
+  <li><b>Travel History:</b> Timeline view per employee showing all historical journeys, hotel stays, and cab companions.</li>
+</ul>
+
+<h2>13. In-App Bug &amp; Issue Reporting System</h2>
+<ul>
+  <li><b>Floating Bug Widget:</b> Accessible across all screens to all users (Ground Staff, Managers, Vendors, Finance, Admin).</li>
+  <li><b>Automatic Context Capture:</b> Captures page URL, page title, user role, and browser environment automatically.</li>
+  <li><b>Submission &amp; Screenshot:</b> User enters issue description and attaches screenshot.</li>
+  <li><b>Administrative Bug Dashboard:</b> Dedicated screen for Admins and Super Admins (<code>/bug-reports</code>) with status tracking (<code>OPEN</code>, <code>RESOLVED</code>), resolution notes, resolving admin, and timestamps.</li>
+</ul>
+
+<h2>14. Dashboard, Analytics &amp; Reporting</h2>
+<ul>
+  <li><b>Live Operations Dashboard:</b> Visual breakdown of deployed staff by state and campaign, pending queues, and system alerts.</li>
+  <li><b>Departmental Analytics:</b> Trips, headcount, hotel nights, and booked expenditures by department.</li>
+  <li><b>Cost Analytics:</b> Expenditures filterable by campaign, location, and date range across Travel, Cabs, Hotels, and Reimbursements.</li>
+  <li><b>Telemetry Audit Reports:</b> Cross-references cab meter actual KM against vendor billed KM to detect overbilling.</li>
+  <li><b>Travel Logs:</b> Complete historical log of all movements, filterable and exportable to CSV.</li>
+</ul>
+
+<h2>15. Notifications, Reminders &amp; Communications</h2>
+<ul>
+  <li><b>In-App &amp; Email:</b> Real-time notification center plus Gmail SMTP delivery. Decisions, bookings (with ticket attached), room-sharing notices, and pending alerts.</li>
+  <li><b>Automated Reminders:</b> Travelers notified 2 days before a trip; managers and admins reminded of requests pending over 3 days.</li>
+  <li><b>Delivery Ledger:</b> Audit log tracking recipient, timestamp, delivery status (`SENT`, `FAILED`, `SUPPRESSED`), and server responses.</li>
+</ul>
+
+<h2>16. Security &amp; Cryptographic Audit Logging</h2>
+<ul>
+  <li><b>Cryptographic Append-Only Activity Log:</b> Every event (creation, edits, manager L1 approvals, admin L2 approvals, vendor hotel submissions, employee hotel picks, manual check-in/outs, cab odometer captures, finance reimbursement audits, disbursements, bug reports) is recorded in an immutable ledger.</li>
+  <li><b>Tamper-Evident Hash Chaining:</b> Each row contains the SHA-256 hash of the previous row, verified via the admin console. Append-only database user grants in production (`INSERT` and `SELECT` only).</li>
+  <li><b>Rate Limiting &amp; Hardening:</b> Per-IP rate limiting on authentication endpoints, secure HTTP headers, and environment-based credential management.</li>
+</ul>
+
+<h2>17. Platform Architecture &amp; Delivery Specifications</h2>
+<ul>
+  <li><b>Frontend:</b> Modern responsive single-page application built with React, TypeScript, Tailwind CSS, and Vite.</li>
+  <li><b>Backend:</b> High-performance RESTful API engineered with Python FastAPI, Pydantic data schemas, and SQLAlchemy ORM.</li>
+  <li><b>Database:</b> MySQL 8 Enterprise Database with automated Alembic schema migrations.</li>
+  <li><b>Document &amp; Image Storage:</b> Secure localized storage outside the web root, with cloud storage abstraction ready for Google Cloud Storage (GCS).</li>
+  <li><b>Deployment:</b> Multi-container Docker architecture (<code>docker-compose.yml</code>), containerized for production on Google Cloud Run or Linux VM hosting.</li>
+  <li><b>Quality Assurance:</b> Over 1,000 automated unit, API, and integration test suites, alongside end-to-end database build verification.</li>
+</ul>
+
+<footer class="sign">
+  <div>Sriyatra Travel Management System &middot; DesignBoxed Innovations Pvt. Ltd.</div>
+  <div>Master Scope of Work v4.1 &middot; November 2026 &middot; Prepared by Menthyala Sridhar</div>
+</footer>
+
+</body>
+</html>

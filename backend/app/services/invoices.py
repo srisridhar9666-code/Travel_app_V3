@@ -510,7 +510,7 @@ def refresh(invoice: Invoice) -> dict:
 
 #: The roles that prepare invoices. Matches `deps.InvoiceEditor`; used where
 #: a read model tells the page which buttons to offer.
-EDITOR_ROLES = frozenset({Role.ADMIN, Role.SYSTEM_ADMIN})
+EDITOR_ROLES = frozenset({Role.ADMIN, Role.SYSTEM_ADMIN, Role.FINANCE, Role.VENDOR})
 
 _PREPARING = (AuditAction.CREATE, AuditAction.UPDATE, AuditAction.SUBMIT)
 

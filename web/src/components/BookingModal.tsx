@@ -34,11 +34,13 @@ import { PhoneBadge } from '@/components/PhoneBadge';
 import { RequestTripHighlight } from '@/components/RequestTripHighlight';
 import { Badge, Button, Field, Input } from '@/components/ui';
 import { VendorSelect, sharedVendor } from '@/components/VendorSelect';
+import { useAuth } from '@/store/auth';
 import {
   bookTravellers,
   errorMessage,
   fetchCombinedTickets,
   fetchRequest,
+  fetchTelemetrySettings,
   fetchTicketFile,
   fetchTickets,
   uploadTicket,
@@ -144,7 +146,8 @@ function fieldsOf(read: CombinedTickets, hotel: boolean): Partial<BookingDraft> 
 /** Files that can go with this booking: uploaded for someone in it, and not
  *  sent with an earlier one or thrown away. */
 const sendable = (ticket: Ticket, who: number[]) =>
-  who.includes(ticket.traveller_id) && (ticket.status === 'EXTRACTED' || ticket.status === 'FAILED');
+  who.includes(ticket.traveller_id) &&
+  (ticket.status === 'EXTRACTED' || ticket.status === 'FAILED' || ticket.status === 'UPLOADED');
 
 /** Mount with a `key` per traveller, so each opens on its own defaults. */
 export function BookingModal({
@@ -202,6 +205,11 @@ export function BookingModal({
     queryKey: ['tickets', request.id],
     queryFn: () => fetchTickets(request.id),
   });
+  const { data: telemetrySettings } = useQuery({
+    queryKey: ['telemetry-settings'],
+    queryFn: fetchTelemetrySettings,
+  });
+  const aiAutofillEnabled = telemetrySettings?.ai_ticket_autofill_enabled ?? true;
 
   // The first time the uploaded files are known: send every one for the
   // people being booked.
@@ -239,9 +247,14 @@ export function BookingModal({
     setFilled('ticket');
   }, [combined.data, isCab, isHotel]);
 
+  const { user } = useAuth();
+  const isVendorUser = Boolean((user?.role === 'VENDOR' || user?.is_vendor) && user?.vendor_id);
+
   const people = (detail.data?.travellers ?? request.travellers).filter((t) => who.includes(t.id));
-  const vendorWas = detail.data ? sharedVendor(people) : '';
-  const vendor = vendorPick ?? vendorWas;
+  const vendorWas = detail.data
+    ? (sharedVendor(people) || detail.data.assigned_vendor_id || (isVendorUser ? user!.vendor_id! : ''))
+    : (isVendorUser ? user!.vendor_id! : '');
+  const vendor = isVendorUser ? user!.vendor_id! : (vendorPick ?? vendorWas);
   const files = (tickets.data ?? []).filter((t) => (fileIds ?? []).includes(t.id));
 
   const upload = useMutation({
@@ -274,8 +287,13 @@ export function BookingModal({
         }
       }
       const read = added.filter((t) => t.status === 'EXTRACTED').length;
+      const uploadedManual = added.filter((t) => t.status === 'UPLOADED').length;
       if (added.length === 0) return;
-      if (read === added.length) {
+      if (uploadedManual === added.length) {
+        toast.success(
+          `${added.length === 1 ? 'Ticket uploaded' : `${added.length} tickets uploaded`} (AI autofill is off — enter details manually below)`,
+        );
+      } else if (read === added.length) {
         toast.success(
           added.length === 1 ? 'Read - check the details below' : `All ${added.length} read - check the details below`,
         );
@@ -381,7 +399,13 @@ export function BookingModal({
       };
     }
     if (cost.trim()) body.cost_amount = cost.trim();
-    if (vendor !== vendorWas) body.vendor_id = vendor === '' ? null : vendor;
+    if (isVendorUser) {
+      body.vendor_id = user!.vendor_id!;
+    } else if (vendor !== '') {
+      body.vendor_id = Number(vendor);
+    } else if (vendor !== vendorWas) {
+      body.vendor_id = null;
+    }
     save.mutate(body);
   };
 
@@ -557,13 +581,15 @@ export function BookingModal({
           {uploading && (
             <p className="flex items-center gap-2 rounded-md bg-surface-sunken px-3 py-2 text-xs text-text-muted">
               <Loader2 size={13} className="animate-spin" />
-              {uploading.of > 1
-                ? `Reading ${uploading.of} files - ${uploading.done} done…`
-                : 'Reading the file - up to 20 seconds…'}
+              {!aiAutofillEnabled
+                ? `Uploading ${uploading.of > 1 ? `${uploading.of} files (${uploading.done} done)` : 'file'}…`
+                : uploading.of > 1
+                  ? `Reading ${uploading.of} files - ${uploading.done} done…`
+                  : 'Reading the file - up to 20 seconds…'}
             </p>
           )}
 
-          {files.length > 0 && combined.data && !uploading && (
+          {files.length > 0 && combined.data && combined.data.files_read > 0 && !uploading && (
             <div className="rounded-md bg-surface-sunken px-3 py-2 text-2xs text-text-muted">
               <p className="font-medium text-text">
                 {combined.data.files_read === combined.data.files
@@ -588,7 +614,9 @@ export function BookingModal({
               <Upload size={16} />
               {isCab
                 ? 'Optional: the vendor’s slip or invoice.'
-                : 'Upload one or more - the details below fill in from all of them.'}
+                : aiAutofillEnabled
+                  ? 'Upload one or more - the details below fill in from all of them.'
+                  : 'Upload ticket file(s) — AI autofill is turned off by Admin; enter booking details below.'}
             </button>
           ) : (
             <ul className="space-y-1.5">
@@ -601,8 +629,20 @@ export function BookingModal({
                   <span className="min-w-0 flex-1 basis-32 truncate text-xs font-medium">
                     {ticket.file_name ?? 'File'}
                   </span>
-                  <Badge tone={ticket.status === 'FAILED' ? 'warning' : 'success'}>
-                    {ticket.status === 'FAILED' ? 'Could not read' : 'Read'}
+                  <Badge
+                    tone={
+                      ticket.status === 'FAILED'
+                        ? 'warning'
+                        : ticket.status === 'UPLOADED'
+                          ? 'info'
+                          : 'success'
+                    }
+                  >
+                    {ticket.status === 'FAILED'
+                      ? 'Could not read'
+                      : ticket.status === 'UPLOADED'
+                        ? 'Uploaded'
+                        : 'Read'}
                   </Badge>
                   <Button
                     size="sm"
@@ -726,13 +766,17 @@ export function BookingModal({
           <Field
             label="Paid to"
             htmlFor="bk-vendor"
-            hint="The travel agent, cab operator or hotel - for the vendor’s invoice."
+            hint={
+              isVendorUser
+                ? 'Locked to your vendor organization.'
+                : 'The travel agent, cab operator or hotel - for the vendor’s invoice.'
+            }
           >
             <VendorSelect
               id="bk-vendor"
               value={vendor}
               onChange={setVendorPick}
-              disabled={detail.isPending}
+              disabled={detail.isPending || isVendorUser}
               emptyLabel="Not recorded"
             />
           </Field>

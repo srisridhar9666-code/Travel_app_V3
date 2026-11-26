@@ -25,6 +25,7 @@ import {
   ItemList,
   Select,
   Skeleton,
+  tabButtonClass,
   ZEBRA_ROWS,
 } from '@/components/ui';
 import {
@@ -492,12 +493,7 @@ export default function NotificationsPage() {
             type="button"
             onClick={() => setTab(key)}
             aria-pressed={tab === key}
-            className={cn(
-              '-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors',
-              tab === key
-                ? 'border-primary font-medium text-text'
-                : 'border-transparent text-text-muted hover:text-text',
-            )}
+            className={tabButtonClass(tab === key, 'underline')}
           >
             <Icon size={13} />
             {label}

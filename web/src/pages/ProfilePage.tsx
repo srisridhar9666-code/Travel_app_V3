@@ -62,6 +62,12 @@ interface Details {
   base_state: string;
   base_location: string;
   employee_code: string;
+  hotel_occupancy_entitlement: 'SINGLE' | 'DOUBLE';
+  upi_id: string;
+  bank_name: string;
+  bank_account_number: string;
+  account_holder_name: string;
+  ifsc_code: string;
 }
 
 function detailsOf(user: UserProfile): Details {
@@ -74,6 +80,13 @@ function detailsOf(user: UserProfile): Details {
     base_state: user.base_state ?? '',
     base_location: user.base_location ?? '',
     employee_code: user.employee_code ?? '',
+    hotel_occupancy_entitlement:
+      (user.hotel_occupancy_entitlement as 'SINGLE' | 'DOUBLE') || 'DOUBLE',
+    upi_id: user.upi_id ?? '',
+    bank_name: user.bank_name ?? '',
+    bank_account_number: user.bank_account_number ?? '',
+    account_holder_name: user.account_holder_name ?? '',
+    ifsc_code: user.ifsc_code ?? '',
   };
 }
 
@@ -115,8 +128,21 @@ function Profile({ user }: { user: UserProfile }) {
     if (name !== user.full_name) out.full_name = name;
     const phone = details.phone.trim();
     if (phone !== (user.phone ?? '')) out.phone = phone || null;
+
+    if (details.upi_id !== (user.upi_id ?? '')) out.upi_id = details.upi_id.trim() || null;
+    if (details.bank_name !== (user.bank_name ?? '')) out.bank_name = details.bank_name.trim() || null;
+    if (details.bank_account_number !== (user.bank_account_number ?? ''))
+      out.bank_account_number = details.bank_account_number.trim() || null;
+    if (details.account_holder_name !== (user.account_holder_name ?? ''))
+      out.account_holder_name = details.account_holder_name.trim() || null;
+    if (details.ifsc_code !== (user.ifsc_code ?? ''))
+      out.ifsc_code = details.ifsc_code.trim().toUpperCase() || null;
+
     if (!isAdmin) return out;
 
+    if (details.hotel_occupancy_entitlement !== (user.hotel_occupancy_entitlement || 'DOUBLE')) {
+      out.hotel_occupancy_entitlement = details.hotel_occupancy_entitlement;
+    }
     if (details.designation !== (user.designation ?? '')) out.designation = details.designation || null;
     if (details.department_id !== (user.department_id ?? null)) out.department_id = details.department_id;
     if (details.gender && details.gender !== user.gender) out.gender = details.gender;
@@ -136,7 +162,17 @@ function Profile({ user }: { user: UserProfile }) {
 
   const saveDetails = useMutation({
     mutationFn: async () => {
-      if (!isAdmin) return updateMyProfile({ full_name: changes.full_name, phone: changes.phone });
+      if (!isAdmin) {
+        return updateMyProfile({
+          full_name: changes.full_name,
+          phone: changes.phone,
+          upi_id: changes.upi_id,
+          bank_name: changes.bank_name,
+          bank_account_number: changes.bank_account_number,
+          account_holder_name: changes.account_holder_name,
+          ifsc_code: changes.ifsc_code,
+        });
+      }
       await updateUser(user.id, changes);
       return fetchMe();
     },
@@ -321,6 +357,24 @@ function Profile({ user }: { user: UserProfile }) {
                       onChange={(e) => edit({ employee_code: e.target.value })}
                     />
                   </Field>
+                  <Field
+                    label="Hotel room occupancy entitlement"
+                    htmlFor="profile_occupancy"
+                    hint="Controls whether employee gets a single room or double sharing."
+                  >
+                    <Select
+                      id="profile_occupancy"
+                      value={details.hotel_occupancy_entitlement}
+                      onChange={(e) =>
+                        edit({
+                          hotel_occupancy_entitlement: e.target.value as 'SINGLE' | 'DOUBLE',
+                        })
+                      }
+                    >
+                      <option value="DOUBLE">Double Sharing Room (Default)</option>
+                      <option value="SINGLE">Single Occupancy Room</option>
+                    </Select>
+                  </Field>
                 </div>
                 <div className="rounded-md bg-surface-sunken px-3 py-3">
                   <ReadOnly label="App access">{ROLE_LABELS[user.role]}</ReadOnly>
@@ -339,6 +393,9 @@ function Profile({ user }: { user: UserProfile }) {
                   <ReadOnly label="Employee code">{user.employee_code}</ReadOnly>
                   <ReadOnly label="Gender">{GENDER_LABELS[user.gender]}</ReadOnly>
                   <ReadOnly label="Department">{user.department_name}</ReadOnly>
+                  <ReadOnly label="Hotel occupancy">
+                    {user.hotel_occupancy_entitlement === 'SINGLE' ? 'Single Room' : 'Double Sharing'}
+                  </ReadOnly>
                   <ReadOnly label="Base">{base}</ReadOnly>
                   {user.manager_name && (
                     <ReadOnly label="Reports to">{user.manager_name}</ReadOnly>
@@ -347,6 +404,58 @@ function Profile({ user }: { user: UserProfile }) {
                 <p className="mt-3 text-xs text-text-subtle">Managed by your administrator.</p>
               </div>
             )}
+
+            {/* Payout & Bank Details */}
+            <div className="pt-2 border-t border-border/60">
+              <h4 className="text-xs font-semibold text-text uppercase tracking-wider mb-2">
+                Reimbursement Payout Details (Receive Money)
+              </h4>
+              <p className="text-2xs text-text-muted mb-3">
+                Your reimbursements will be credited directly to this UPI ID or Bank Account.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="UPI ID" htmlFor="profile_upi" className="sm:col-span-2">
+                  <Input
+                    id="profile_upi"
+                    value={details.upi_id}
+                    onChange={(e) => edit({ upi_id: e.target.value })}
+                    placeholder="e.g. name@okhdfcbank"
+                  />
+                </Field>
+                <Field label="Bank Name" htmlFor="profile_bank_name">
+                  <Input
+                    id="profile_bank_name"
+                    value={details.bank_name}
+                    onChange={(e) => edit({ bank_name: e.target.value })}
+                    placeholder="e.g. HDFC Bank"
+                  />
+                </Field>
+                <Field label="Bank A/c Number" htmlFor="profile_bank_ac">
+                  <Input
+                    id="profile_bank_ac"
+                    value={details.bank_account_number}
+                    onChange={(e) => edit({ bank_account_number: e.target.value })}
+                    placeholder="e.g. 50100234567890"
+                  />
+                </Field>
+                <Field label="A/c Holder Name" htmlFor="profile_holder">
+                  <Input
+                    id="profile_holder"
+                    value={details.account_holder_name}
+                    onChange={(e) => edit({ account_holder_name: e.target.value })}
+                    placeholder="e.g. Priya Sharma"
+                  />
+                </Field>
+                <Field label="IFSC Code" htmlFor="profile_ifsc">
+                  <Input
+                    id="profile_ifsc"
+                    value={details.ifsc_code}
+                    onChange={(e) => edit({ ifsc_code: e.target.value.toUpperCase() })}
+                    placeholder="e.g. HDFC0001234"
+                  />
+                </Field>
+              </div>
+            </div>
 
             <ErrorBox message={detailsError} />
 

@@ -3,21 +3,39 @@ import axios, { AxiosError } from 'axios';
 import type {
   CabTrip,
   CabType,
+  CabTelemetry,
+  CabTripStartPayload,
+  CabTripEndPayload,
+  HotelStayVerification,
+  HotelCheckInPayload,
+  HotelCheckOutPayload,
+  VerificationReviewPayload,
   AppNotification,
   AnalyticsBundle,
   AuditRow,
   BatchDecisionItem,
   BookingDetails,
+  BugReport,
+  BugReportStatus,
   ChainVerification,
+  CityTier,
   CombinedTickets,
   Colleague,
   CoStayMatch,
   CostPreview,
   Department,
+  DisbursementSettlementPayload,
   EligibleRow,
   EmailStatus,
   EmailTestResult,
+  ExpenseClaim,
+  ExpenseClaimCreatePayload,
+  ExpenseStatus,
   FilterOptions,
+  FinanceAuditPayload,
+  HotelOccupancy,
+  HotelProposal,
+  HotelProposalCreateItem,
   Insights,
   InsightFilters,
   TravelLog,
@@ -33,6 +51,7 @@ import type {
   JobResult,
   LedgerRow,
   LoginResponse,
+  ManagerEndorsementPayload,
   ManagerRecommendation,
   NotificationPreferences,
   NotificationLedger,
@@ -50,6 +69,8 @@ import type {
   RequestType,
   RetentionStatus,
   ReviewFilter,
+  SavedHotel,
+  SavedHotelPayload,
   TravelHistory,
   SchedulerStatus,
   RoomSharingChoice,
@@ -57,6 +78,7 @@ import type {
   TeamChangeList,
   TeamChangeStatus,
   TeamDecision,
+  TelemetrySettings,
   ThemePreference,
   Ticket,
   TokenPreview,
@@ -64,6 +86,7 @@ import type {
   TravelRequest,
   UserProfile,
   UserRow,
+  UserTelemetryStatus,
   Vendor,
   VendorPayload,
   UserStatus,
@@ -296,6 +319,15 @@ export interface UserPayload {
   department_id?: number | null;
   /** Ground staff only: the manager they report to. */
   manager_id?: number | null;
+  /** Vendor company if role is VENDOR. */
+  vendor_id?: number | null;
+  /** Room occupancy entitlement: SINGLE or DOUBLE. */
+  hotel_occupancy_entitlement?: HotelOccupancy;
+  upi_id?: string | null;
+  bank_name?: string | null;
+  bank_account_number?: string | null;
+  account_holder_name?: string | null;
+  ifsc_code?: string | null;
   /** Create only: email the invitation as well as showing the link. */
   send_email?: boolean;
 }
@@ -342,6 +374,7 @@ export interface TeamAddPayload {
   employee_code?: string | null;
   base_state?: string | null;
   base_location?: string | null;
+  hotel_occupancy_entitlement?: HotelOccupancy | null;
   note?: string | null;
 }
 
@@ -359,6 +392,10 @@ export const askToAddMember = (payload: TeamAddPayload) =>
 
 export const askToEditMember = (userId: number, payload: TeamEditPayload) =>
   api.post<TeamChange>(`/team/changes/edit/${userId}`, payload).then((r) => r.data);
+
+/** Manager direct evaluation of team member hotel room occupancy entitlement (Single vs Double). */
+export const updateMemberOccupancy = (userId: number, entitlement: HotelOccupancy) =>
+  api.put<UserRow>(`/team/members/${userId}/occupancy`, { hotel_occupancy_entitlement: entitlement }).then((r) => r.data);
 
 export const askToRemoveMember = (userId: number, payload: TeamRemovePayload) =>
   api.post<TeamChange>(`/team/changes/remove/${userId}`, payload).then((r) => r.data);
@@ -674,21 +711,131 @@ export const exportQueue = (params: {
 
 /** Several travellers on one request in a single transaction — one failure rolls
  *  the whole set back, so the queue never shows a half-applied decision. */
-export const decideBatch = (requestId: number, decisions: BatchDecisionItem[]) =>
-  api.post<TravelRequest>(`/requests/${requestId}/decide`, { decisions }).then((r) => r.data);
+export const decideBatch = (
+  requestId: number,
+  decisions: BatchDecisionItem[],
+  extra?: { assigned_vendor_id?: number | null; hotel_occupancy?: HotelOccupancy; cab_type?: CabType }
+) =>
+  api.post<TravelRequest>(`/requests/${requestId}/decide`, { decisions, ...extra }).then((r) => r.data);
+
+/** Assign or reassign contracted vendor for request fulfillment (SOW Section 6) */
+export const assignRequestVendor = (requestId: number, vendorId: number | null) =>
+  api.post<TravelRequest>(`/requests/${requestId}/assign-vendor`, { vendor_id: vendorId }).then((r) => r.data);
+
+/** Corporate Policy lookup for city tier & nightly lodging ceiling (SOW Section 4.2) */
+export const fetchLodgingCeiling = (city: string, occupancy: HotelOccupancy = 'SINGLE') =>
+  api
+    .get<{ city: string; tier: CityTier; tier_label: string; occupancy: HotelOccupancy; limit_per_night: number }>(
+      '/policies/lodging-ceiling',
+      { params: { city, occupancy } }
+    )
+    .then((r) => r.data);
+
+export const fetchPolicyOverview = () =>
+  api
+    .get<{
+      food_allowance_per_day: number;
+      local_transit_unbilled_max: number;
+      lodging_limits: Record<string, Record<string, number>>;
+      city_tier_labels: Record<string, string>;
+    }>('/policies/overview')
+    .then((r) => r.data);
+
+/** Hotel Proposals Sourcing & Selection (SOW Section 6) */
+export const fetchHotelProposals = (requestId: number) =>
+  api.get<HotelProposal[]>(`/requests/${requestId}/hotel-proposals`).then((r) => r.data);
+
+export const submitHotelProposals = (requestId: number, proposals: HotelProposalCreateItem[]) =>
+  api.post<HotelProposal[]>(`/requests/${requestId}/hotel-proposals`, { options: proposals, proposals }).then((r) => r.data);
+
+export const selectHotelProposal = (requestId: number, proposalId: number) =>
+  api.post<HotelProposal>(`/requests/${requestId}/hotel-proposals/${proposalId}/select`).then((r) => r.data);
+
+export const deleteHotelProposal = (requestId: number, proposalId: number) =>
+  api.delete(`/requests/${requestId}/hotel-proposals/${proposalId}`).then((r) => r.data);
+
+/** In-Transit Telemetry & On-Site Verification (SOW Section 8 & 9) */
+export const uploadTelemetryFile = (file: File) => {
+  const form = new FormData();
+  form.append('file', file);
+  return api.post<{ file_path: string; file_name: string }>('/telemetry/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then((r) => r.data);
+};
+
+export const fetchTelemetryFileBlob = (path: string) =>
+  api
+    .get('/telemetry/file', { params: { path }, responseType: 'blob' })
+    .then((r) => r.data as Blob);
+
+export const fetchCabTelemetries = (requestId: number) =>
+  api.get<CabTelemetry[]>(`/requests/${requestId}/cab-telemetry`).then((r) => r.data);
+
+export const startCabTrip = (requestId: number, payload: CabTripStartPayload) =>
+  api.post<CabTelemetry>(`/requests/${requestId}/cab-telemetry/start`, payload).then((r) => r.data);
+
+export const endCabTrip = (requestId: number, telemetryId: number, payload: CabTripEndPayload) =>
+  api.post<CabTelemetry>(`/requests/${requestId}/cab-telemetry/${telemetryId}/end`, payload).then((r) => r.data);
+
+export const verifyCabTelemetry = (requestId: number, telemetryId: number, payload: VerificationReviewPayload) =>
+  api.post<CabTelemetry>(`/requests/${requestId}/cab-telemetry/${telemetryId}/verify`, payload).then((r) => r.data);
+
+export const forceCloseCabTelemetry = (requestId: number, telemetryId: number, reason: string) =>
+  api.post<CabTelemetry>(`/requests/${requestId}/cab-telemetry/${telemetryId}/force-close`, { reason }).then((r) => r.data);
+
+export const fetchHotelVerifications = (requestId: number) =>
+  api.get<HotelStayVerification[]>(`/requests/${requestId}/hotel-verification`).then((r) => r.data);
+
+export const hotelCheckIn = (requestId: number, payload: HotelCheckInPayload) =>
+  api.post<HotelStayVerification>(`/requests/${requestId}/hotel-verification/check-in`, payload).then((r) => r.data);
+
+export const hotelCheckOut = (requestId: number, verificationId: number, payload: HotelCheckOutPayload) =>
+  api.post<HotelStayVerification>(`/requests/${requestId}/hotel-verification/${verificationId}/check-out`, payload).then((r) => r.data);
+
+export const verifyHotelStay = (requestId: number, verificationId: number, payload: VerificationReviewPayload) =>
+  api.post<HotelStayVerification>(`/requests/${requestId}/hotel-verification/${verificationId}/verify`, payload).then((r) => r.data);
+
+export const forceCloseHotelStay = (requestId: number, verificationId: number, reason: string) =>
+  api.post<HotelStayVerification>(`/requests/${requestId}/hotel-verification/${verificationId}/force-close`, { reason }).then((r) => r.data);
+
+/** Post-Travel Expense Reimbursements (SOW Section 10) */
+export const fetchExpenseClaims = (params?: { status?: ExpenseStatus; user_id?: number; project_id?: number }) =>
+  api.get<ExpenseClaim[]>('/expenses', { params }).then((r) => r.data);
+
+export const fetchExpenseClaim = (claimId: number) =>
+  api.get<ExpenseClaim>(`/expenses/${claimId}`).then((r) => r.data);
+
+export const createExpenseClaim = (payload: ExpenseClaimCreatePayload) =>
+  api.post<ExpenseClaim>('/expenses', payload).then((r) => r.data);
+
+export const endorseExpenseClaim = (claimId: number, payload: ManagerEndorsementPayload) =>
+  api.post<ExpenseClaim>(`/expenses/${claimId}/endorse`, payload).then((r) => r.data);
+
+export const auditExpenseClaim = (claimId: number, payload: FinanceAuditPayload) =>
+  api.post<ExpenseClaim>(`/expenses/${claimId}/audit`, payload).then((r) => r.data);
+
+export const settleExpenseClaim = (claimId: number, payload: DisbursementSettlementPayload) =>
+  api.post<ExpenseClaim>(`/expenses/${claimId}/settle`, payload).then((r) => r.data);
+
+export const exportExpenseClaims = () =>
+  api.get('/expenses/export', { responseType: 'blob' }).then((r) => r.data as Blob);
 
 /** A manager's team requests: still waiting for their recommendation, or
  *  already reviewed. One shared query key, so the sidebar badge and the Team
  *  approvals page agree. */
 export const fetchTeamReviews = (review: ReviewFilter) =>
-  fetchRequests({ mine: false, review, sort: 'priority', page_size: 100 });
+  fetchRequests({ mine: false, review, sort: review === 'reviewed' ? 'newest' : 'priority', page_size: 100 });
 
-interface RecommendationBody {
+export interface RecommendationBody {
   recommendation: ManagerRecommendation;
   comment: string;
   /** Traveller rows on the request. Left out: every one of the manager's
    *  team on it who is still pending. */
   traveller_ids?: number[];
+  /** Manager Single vs Double room occupancy evaluation during L1 review */
+  hotel_occupancy?: HotelOccupancy;
+  /** Manager car type recommendation for cabs */
+  cab_type?: CabType;
 }
 
 /** The first of the two levels: the manager's view, with a comment. Advice -
@@ -978,6 +1125,9 @@ export const updateInvoice = (id: number, payload: Partial<InvoicePayload>) =>
 export const submitInvoice = (id: number) =>
   api.post<Invoice>(`/invoices/${id}/submit`).then((r) => r.data);
 
+export const verifyInvoice = (id: number, comment?: string | null) =>
+  api.post<Invoice>(`/invoices/${id}/verify`, { comment: comment?.trim() || null }).then((r) => r.data);
+
 /** `expected_total` is the total on screen: if a cost moved it since, the
  *  server refuses and the page shows the new figures instead. */
 export const approveInvoice = (
@@ -1091,3 +1241,89 @@ export const fetchInsights = (params: InsightFilters) =>
 
 export const fetchFilterOptions = () =>
   api.get<FilterOptions>('/analytics/filter-options').then((r) => r.data);
+
+// --- vendor portal accounts -------------------------------------------------
+
+export const createVendorLogin = (
+  vendorId: number,
+  payload: { email?: string; password?: string; full_name?: string },
+) =>
+  api
+    .post<{
+      success: boolean;
+      user_id: number;
+      email: string;
+      full_name: string;
+      message: string;
+      temporary_password?: string;
+    }>(`/vendors/${vendorId}/login`, payload)
+    .then((r) => r.data);
+
+// --- saved hotels directory -------------------------------------------------
+
+export const fetchSavedHotels = (params?: {
+  city?: string;
+  vendor_id?: number;
+  query?: string;
+  active_only?: boolean;
+}) =>
+  api.get<SavedHotel[]>('/hotels', { params }).then((r) => r.data);
+
+export const createSavedHotel = (payload: SavedHotelPayload) =>
+  api.post<SavedHotel>('/hotels', payload).then((r) => r.data);
+
+export const updateSavedHotel = (hotelId: number, payload: Partial<SavedHotelPayload>) =>
+  api.patch<SavedHotel>(`/hotels/${hotelId}`, payload).then((r) => r.data);
+
+export const deleteSavedHotel = (hotelId: number) =>
+  api.delete(`/hotels/${hotelId}`).then((r) => r.data);
+
+// --- telemetry settings & regularization unlock -----------------------------
+
+export const fetchTelemetrySettings = () =>
+  api.get<TelemetrySettings>('/telemetry/settings').then((r) => r.data);
+
+export const updateTelemetrySettings = (payload: Partial<TelemetrySettings>) =>
+  api.patch<TelemetrySettings>('/telemetry/settings', payload).then((r) => r.data);
+
+export const fetchUserTelemetryStatus = (userId: number) =>
+  api.get<UserTelemetryStatus>(`/telemetry/user-status/${userId}`).then((r) => r.data);
+
+export const unlockUserTelemetry = (userId: number) =>
+  api.post<{ message: string }>(`/telemetry/unlock-user/${userId}`).then((r) => r.data);
+
+// --- in-app bug reports -----------------------------------------------------
+
+export function createBugReport(payload: {
+  comment: string;
+  page_url?: string;
+  page_title?: string;
+  browser_info?: string;
+  screenshot?: Blob | null;
+}) {
+  const form = new FormData();
+  form.append('comment', payload.comment);
+  if (payload.page_url) form.append('page_url', payload.page_url);
+  if (payload.page_title) form.append('page_title', payload.page_title);
+  if (payload.browser_info) form.append('browser_info', payload.browser_info);
+  if (payload.screenshot) {
+    form.append('screenshot', payload.screenshot, `bug-screenshot-${Date.now()}.png`);
+  }
+  return api
+    .post<BugReport>('/bug-reports', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    .then((r) => r.data);
+}
+
+export const fetchBugReports = (status?: BugReportStatus) =>
+  api.get<BugReport[]>('/bug-reports', { params: status ? { status } : {} }).then((r) => r.data);
+
+export const fetchBugScreenshotBlob = (bugId: number) =>
+  api.get(`/bug-reports/${bugId}/screenshot`, { responseType: 'blob' }).then((r) => r.data as Blob);
+
+export const updateBugReport = (
+  bugId: number,
+  payload: { status: BugReportStatus; resolution_note?: string | null },
+) => api.patch<BugReport>(`/bug-reports/${bugId}`, payload).then((r) => r.data);
+

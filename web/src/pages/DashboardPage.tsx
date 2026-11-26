@@ -2,15 +2,28 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   ArrowRight,
+  ArrowUpRight,
+  BedDouble,
   Building2,
   CalendarCheck,
+  Car,
+  CheckCircle2,
   CheckSquare,
+  ClipboardCheck,
   Clock,
+  FileCheck,
+  FolderKanban,
+  History,
   IndianRupee,
   MapPin,
   Moon,
   Plane,
+  Receipt,
+  ShieldCheck,
+  Store,
   Users,
+  UsersRound,
+  Wallet,
 } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -25,8 +38,17 @@ import {
 } from '@/components/ReportFilters';
 import { TravelHistoryPanel } from '@/components/TravelHistoryPanel';
 import { Columns, HorizontalBars, StatTile, formatMoney } from '@/components/charts';
-import { Button, Card, CardHeader, PageHeader, Skeleton, ZEBRA_ROWS } from '@/components/ui';
-import { fetchFilterOptions, fetchInsights, fetchQueueCounts } from '@/lib/api';
+import { Badge, Button, Card, CardHeader, PageHeader, Skeleton, ZEBRA_ROWS } from '@/components/ui';
+import {
+  fetchExpenseClaims,
+  fetchFilterOptions,
+  fetchInsights,
+  fetchInvoices,
+  fetchMyTeam,
+  fetchQueueCounts,
+  fetchRequests,
+  fetchTeamReviews,
+} from '@/lib/api';
 import { periodLabel } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
@@ -37,6 +59,7 @@ import {
   type Insights,
   type TravelMode,
   type TravellerStatus,
+  type UserProfile,
   isAdminRole,
 } from '@/types';
 
@@ -513,11 +536,736 @@ function AdminDashboard() {
   );
 }
 
+function GroundStaffDashboard({ user }: { user: UserProfile }) {
+  const reqsQuery = useQuery({
+    queryKey: ['requests', 'mine'],
+    queryFn: () => fetchRequests({ mine: true, page_size: 50 }),
+  });
+  const claimsQuery = useQuery({
+    queryKey: ['expenses', 'mine'],
+    queryFn: () => fetchExpenseClaims({ user_id: user.id }),
+  });
+
+  const myTrips = reqsQuery.data?.items ?? [];
+  const activeTrips = myTrips.filter((t) => t.status === 'APPROVED' || t.status === 'BOOKED');
+  const pendingTrips = myTrips.filter((t) => t.status === 'SUBMITTED' || t.status === 'PARTIALLY_APPROVED');
+  const claims = claimsQuery.data ?? [];
+  const settledTotal = claims
+    .filter((c) => c.status === 'SETTLED')
+    .reduce((sum, c) => sum + Number(c.total_approved_amount || c.total_claimed_amount), 0);
+
+  return (
+    <div className="space-y-6">
+      {/* Hero Card */}
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-r from-blue-500/10 via-purple-500/5 to-transparent p-6 shadow-sm">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xl font-bold tracking-tight text-text">Ground Operations Portal</span>
+              <Badge tone="info">Field Staff</Badge>
+              {user.hotel_occupancy_entitlement === 'DOUBLE' ? (
+                <Badge tone="neutral" className="bg-purple-100 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300">
+                  Double Sharing Room
+                </Badge>
+              ) : (
+                <Badge tone="neutral" className="bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300">
+                  Single Room Entitled
+                </Badge>
+              )}
+            </div>
+            <p className="text-sm text-text-muted">
+              {user.department_name ? `${user.department_name} · ` : ''}
+              {user.base_location ? `${user.base_location}, ` : ''}
+              {user.base_state || 'India'}
+              {user.manager_name ? ` · Reports to ${user.manager_name}` : ''}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link to="/requests">
+              <Button variant="secondary" size="sm">
+                <History size={14} /> My Bookings
+              </Button>
+            </Link>
+            <Link to="/requests?action=new">
+              <Button size="sm">
+                <CalendarCheck size={14} /> Raise Request
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* 4 Interactive Quick Action Cards */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Link to="/requests?action=new" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400">
+              <Plane size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Raise Travel Request</h4>
+          <p className="mt-1 text-xs text-text-muted">Flight, Train, Bus, Cab or Hotel with automatic two-tier approval routing.</p>
+        </Link>
+
+        <Link to="/requests" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+              <Car size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">In-Transit Telemetry</h4>
+          <p className="mt-1 text-xs text-text-muted">Record morning/evening cab odometer photos or hotel check-in/out GPS.</p>
+        </Link>
+
+        <Link to="/expenses" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <Wallet size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Claim Reimbursement</h4>
+          <p className="mt-1 text-xs text-text-muted">Claim daily food allowances (₹400/day) & local transit conveyance bills.</p>
+        </Link>
+
+        <Link to="/profile" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+              <ShieldCheck size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Identity & Documents</h4>
+          <p className="mt-1 text-xs text-text-muted">Manage AES-256 encrypted Aadhaar, PAN, Passport or Driver's License.</p>
+        </Link>
+      </div>
+
+      {/* KPI Tiles */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatTile
+          label="Active field journeys"
+          value={reqsQuery.isPending ? '—' : String(activeTrips.length)}
+          hint={activeTrips.length > 0 ? 'Approved or confirmed' : 'No active trips'}
+          icon={<Plane size={15} />}
+        />
+        <StatTile
+          label="Awaiting decisions"
+          value={reqsQuery.isPending ? '—' : String(pendingTrips.length)}
+          hint={pendingTrips.length > 0 ? 'With manager or admin' : 'Queue clear'}
+          tone={pendingTrips.length > 0 ? 'warning' : 'default'}
+          icon={<Clock size={15} />}
+        />
+        <StatTile
+          label="Reimbursement claims"
+          value={claimsQuery.isPending ? '—' : String(claims.length)}
+          hint={`${claims.filter((c) => c.status === 'SETTLED').length} settled to bank`}
+          icon={<Receipt size={15} />}
+        />
+        <StatTile
+          label="Disbursed payouts"
+          value={claimsQuery.isPending ? '—' : formatMoney(settledTotal)}
+          hint="Total settled to your bank account"
+          icon={<IndianRupee size={15} />}
+        />
+      </div>
+
+      {/* Corporate Policy Quick Guide */}
+      <Card>
+        <CardHeader
+          title="DesignBoxed Corporate Travel Policy at a Glance"
+          description="Official limits applied during manager review and central finance audit."
+        />
+        <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4 text-xs">
+          <div className="rounded-lg border border-border bg-surface-sunken/40 p-3">
+            <span className="font-semibold text-text">Daily Food Allowance</span>
+            <p className="mt-1 text-lg font-bold text-brand-strong">₹400 / day</p>
+            <p className="mt-1 text-text-subtle">Flat ceiling across all cities. Itemized receipts required.</p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface-sunken/40 p-3">
+            <span className="font-semibold text-text">Local Transit Allowance</span>
+            <p className="mt-1 text-lg font-bold text-brand-strong">₹150 / day</p>
+            <p className="mt-1 text-text-subtle">Unbilled auto allowed up to ₹150; taxi & cab actuals require bills.</p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface-sunken/40 p-3">
+            <span className="font-semibold text-text">Cab Hire Package</span>
+            <p className="mt-1 text-lg font-bold text-brand-strong">80 KM / 8 Hrs</p>
+            <p className="mt-1 text-text-subtle">Odometer verified morning and evening. Excess km auto-audited.</p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface-sunken/40 p-3">
+            <span className="font-semibold text-text">Lodging City Limits</span>
+            <p className="mt-1 text-lg font-bold text-brand-strong">Cat A: ₹1,500+</p>
+            <p className="mt-1 text-text-subtle">Cat A: ₹1,500/₹2,000 · Cat B: ₹1,000/₹1,500 · Cat C: ₹750/₹1,200.</p>
+          </div>
+        </div>
+      </Card>
+
+      {/* Travel History Panel */}
+      <Card>
+        <CardHeader
+          title="Your travel movements"
+          description="Chronological record of all field journeys, cab hires, and hotel stays."
+        />
+        <div className="px-4 py-4 sm:px-5">
+          <TravelHistoryPanel userId={user.id} compact />
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function ManagerDashboard({ user }: { user: UserProfile }) {
+  const reviewsQuery = useQuery({
+    queryKey: ['team-reviews', 'waiting'],
+    queryFn: () => fetchTeamReviews('waiting'),
+  });
+  const myTeamQuery = useQuery({
+    queryKey: ['my-team'],
+    queryFn: fetchMyTeam,
+  });
+  const claimsQuery = useQuery({
+    queryKey: ['expenses', 'team-pending'],
+    queryFn: () => fetchExpenseClaims({ status: 'SUBMITTED' }),
+  });
+
+  const waitingReviews = reviewsQuery.data?.items ?? [];
+  const teamMembers = myTeamQuery.data ?? [];
+  const pendingClaims = claimsQuery.data ?? [];
+
+  return (
+    <div className="space-y-6">
+      {/* Hero Card */}
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-transparent p-6 shadow-sm">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xl font-bold tracking-tight text-text">Team Operations & L1 Review Portal</span>
+              <Badge tone="success">Line Manager</Badge>
+            </div>
+            <p className="text-sm text-text-muted">
+              {user.department_name ? `${user.department_name} · ` : ''}
+              Managing {teamMembers.length} field team member{teamMembers.length === 1 ? '' : 's'}. You hold L1 review authority for bookings and expense claims.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link to="/team-approvals">
+              <Button size="sm">
+                <ClipboardCheck size={14} /> Team Approvals ({waitingReviews.length})
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* 4 Action Cards */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Link to="/team-approvals" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <ClipboardCheck size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Team L1 Approvals</h4>
+          <p className="mt-1 text-xs text-text-muted">Review team travel requests and recommend Single or Double occupancy.</p>
+        </Link>
+
+        <Link to="/expenses" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400">
+              <Wallet size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Expense Endorsements</h4>
+          <p className="mt-1 text-xs text-text-muted">Verify operational necessity of team reimbursement claims before Finance audit.</p>
+        </Link>
+
+        <Link to="/my-team" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-purple-500/10 text-purple-600 dark:text-purple-400">
+              <UsersRound size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Roster & Occupancy</h4>
+          <p className="mt-1 text-xs text-text-muted">Configure Single or Double room entitlements for each team member.</p>
+        </Link>
+
+        <Link to="/projects" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+              <FolderKanban size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Campaign Budgets</h4>
+          <p className="mt-1 text-xs text-text-muted">Track field movements, personnel deployed, and project expenditures.</p>
+        </Link>
+      </div>
+
+      {/* Metrics */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Link to="/team-approvals">
+          <StatTile
+            label="Awaiting L1 recommendation"
+            value={reviewsQuery.isPending ? '—' : String(waitingReviews.length)}
+            hint={waitingReviews.length > 0 ? 'Admin cannot approve until you act' : 'Queue clear'}
+            tone={waitingReviews.length > 0 ? 'warning' : 'default'}
+            icon={<ClipboardCheck size={15} />}
+          />
+        </Link>
+        <Link to="/expenses">
+          <StatTile
+            label="Claims to endorse"
+            value={claimsQuery.isPending ? '—' : String(pendingClaims.length)}
+            hint="Team reimbursement submissions"
+            tone={pendingClaims.length > 0 ? 'warning' : 'default'}
+            icon={<Wallet size={15} />}
+          />
+        </Link>
+        <Link to="/my-team">
+          <StatTile
+            label="Direct team roster"
+            value={myTeamQuery.isPending ? '—' : String(teamMembers.length)}
+            hint="Field executives and team leads"
+            icon={<UsersRound size={15} />}
+          />
+        </Link>
+        <StatTile
+          label="Single room entitlements"
+          value={myTeamQuery.isPending ? '—' : String(teamMembers.filter((m) => m.hotel_occupancy_entitlement === 'SINGLE').length)}
+          hint={`${teamMembers.filter((m) => m.hotel_occupancy_entitlement === 'DOUBLE').length} on Double Sharing`}
+          icon={<BedDouble size={15} />}
+        />
+      </div>
+
+      {/* Awaiting Team Approvals Table */}
+      <Card>
+        <CardHeader
+          title={`Team requests awaiting your L1 recommendation (${waitingReviews.length})`}
+          description="Mandatory Two-Tier Approval: Admin approval is physically disabled until you record an approval."
+          action={
+            <Link to="/team-approvals">
+              <Button size="sm" variant="secondary">Open Team Approvals</Button>
+            </Link>
+          }
+        />
+        {waitingReviews.length === 0 ? (
+          <p className="p-8 text-center text-xs text-text-subtle">No team requests waiting for your recommendation.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-text-muted">
+                  <th className="px-4 py-2.5 font-medium">Requester</th>
+                  <th className="px-4 py-2.5 font-medium">Type</th>
+                  <th className="px-4 py-2.5 font-medium">Route / City</th>
+                  <th className="px-4 py-2.5 font-medium">Priority</th>
+                  <th className="px-4 py-2.5 text-right font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
+                {waitingReviews.slice(0, 5).map((req) => (
+                  <tr key={req.id}>
+                    <td className="px-4 py-3 font-medium">
+                      <div>{req.requester_name}</div>
+                      <div className="text-2xs text-text-subtle">{req.project_code || 'General'}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge tone="neutral">{REQUEST_TYPE_LABELS[req.request_type]}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-text-muted">
+                      {req.request_type === 'HOTEL' ? req.hotel_city : `${req.pickup_city || req.origin} → ${req.drop_city || req.destination}`}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge tone={req.priority === 'HIGH' ? 'danger' : 'neutral'}>{req.priority}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <Link to="/team-approvals">
+                        <Button size="sm" variant="primary">Review</Button>
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function FinanceDashboard({ user }: { user: UserProfile }) {
+  const claimsQuery = useQuery({
+    queryKey: ['expenses'],
+    queryFn: () => fetchExpenseClaims(),
+  });
+  const invoicesQuery = useQuery({
+    queryKey: ['invoices'],
+    queryFn: () => fetchInvoices(),
+  });
+
+  const claims = claimsQuery.data ?? [];
+  const pendingAudit = claims.filter((c) => c.status === 'MANAGER_ENDORSED' || c.status === 'SUBMITTED');
+  const readyForPayout = claims.filter((c) => c.status === 'FINANCE_APPROVED' || c.status === 'PARTIALLY_APPROVED');
+  const settledClaims = claims.filter((c) => c.status === 'SETTLED');
+  const totalSettledINR = settledClaims.reduce((sum, c) => sum + Number(c.total_approved_amount || c.total_claimed_amount), 0);
+  const invoices = invoicesQuery.data?.items ?? [];
+  const pendingInvoices = invoices.filter((i) => i.status === 'DRAFT' || i.status === 'SUBMITTED');
+
+  return (
+    <div className="space-y-6">
+      {/* Hero Card */}
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-r from-emerald-500/10 via-blue-500/5 to-transparent p-6 shadow-sm">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xl font-bold tracking-tight text-text">Corporate Finance Desk — {user.full_name}</span>
+              <Badge tone="success">Finance Desk</Badge>
+            </div>
+            <p className="text-sm text-text-muted">
+              Reimbursement audit desk, policy cap enforcement (₹400 food, ₹150 transit), bank disbursements (UTR), and vendor reconciliation.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link to="/expenses">
+              <Button size="sm">
+                <Wallet size={14} /> Reimbursements Desk
+              </Button>
+            </Link>
+            <Link to="/invoices">
+              <Button size="sm" variant="secondary">
+                <Receipt size={14} /> Vendor Invoices
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* 4 Action Cards */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Link to="/expenses?tab=PENDING" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <ClipboardCheck size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Audit Expense Claims</h4>
+          <p className="mt-1 text-xs text-text-muted">Audit bills against ₹400 daily food ceiling and record line-item deductions.</p>
+        </Link>
+
+        <Link to="/expenses?tab=AUDITED" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400">
+              <IndianRupee size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Disburse Payouts (UTR)</h4>
+          <p className="mt-1 text-xs text-text-muted">Disburse approved funds via NEFT/RTGS/UPI and capture Bank UTR numbers.</p>
+        </Link>
+
+        <Link to="/invoices" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-purple-500/10 text-purple-600 dark:text-purple-400">
+              <Receipt size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Vendor Invoices</h4>
+          <p className="mt-1 text-xs text-text-muted">Commercial billing packages aggregated strictly from completed, verified trips.</p>
+        </Link>
+
+        <Link to="/analytics" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+              <Building2 size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Cost Analytics</h4>
+          <p className="mt-1 text-xs text-text-muted">Cross-departmental expenditures, uncosted movements, and budget utilization.</p>
+        </Link>
+      </div>
+
+      {/* KPI Tiles */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Link to="/expenses?tab=PENDING">
+          <StatTile
+            label="Claims awaiting audit"
+            value={claimsQuery.isPending ? '—' : String(pendingAudit.length)}
+            hint={pendingAudit.length > 0 ? 'Endorsed by manager' : 'All claims audited'}
+            tone={pendingAudit.length > 0 ? 'warning' : 'default'}
+            icon={<ClipboardCheck size={15} />}
+          />
+        </Link>
+        <Link to="/expenses?tab=AUDITED">
+          <StatTile
+            label="Approved (Awaiting UTR)"
+            value={claimsQuery.isPending ? '—' : String(readyForPayout.length)}
+            hint="Ready for bank disbursement"
+            tone={readyForPayout.length > 0 ? 'warning' : 'default'}
+            icon={<IndianRupee size={15} />}
+          />
+        </Link>
+        <StatTile
+          label="Total settled reimbursements"
+          value={claimsQuery.isPending ? '—' : formatMoney(totalSettledINR)}
+          hint={`${settledClaims.length} claims settled`}
+          icon={<Wallet size={15} />}
+        />
+        <Link to="/invoices">
+          <StatTile
+            label="Vendor invoices pending"
+            value={invoicesQuery.isPending ? '—' : String(pendingInvoices.length)}
+            hint="Awaiting Super Admin lock"
+            icon={<Receipt size={15} />}
+          />
+        </Link>
+      </div>
+
+      {/* Pending Claims Queue preview */}
+      <Card>
+        <CardHeader
+          title="Claims awaiting finance audit & settlement"
+          description="Enforces flat ₹400/day food ceiling, ₹150 unbilled auto ceiling, and receipts verification."
+          action={
+            <Link to="/expenses">
+              <Button size="sm" variant="secondary">Open Reimbursements Desk</Button>
+            </Link>
+          }
+        />
+        {pendingAudit.length === 0 && readyForPayout.length === 0 ? (
+          <p className="p-8 text-center text-xs text-text-subtle">No expense claims currently awaiting finance action.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-text-muted">
+                  <th className="px-4 py-2.5 font-medium">Claim Ref</th>
+                  <th className="px-4 py-2.5 font-medium">Employee</th>
+                  <th className="px-4 py-2.5 font-medium">City / Dates</th>
+                  <th className="px-4 py-2.5 font-medium">Status</th>
+                  <th className="px-4 py-2.5 text-right font-medium">Claimed</th>
+                  <th className="px-4 py-2.5 text-right font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
+                {[...pendingAudit, ...readyForPayout].slice(0, 6).map((c) => (
+                  <tr key={c.id}>
+                    <td className="px-4 py-3 font-mono font-medium text-text">{c.claim_code}</td>
+                    <td className="px-4 py-3">
+                      <div>{c.user_name || 'Staff'}</div>
+                      <div className="text-2xs text-text-subtle">{c.department_name || '—'}</div>
+                    </td>
+                    <td className="px-4 py-3 text-text-muted">
+                      {c.destination_city} ({c.travel_start_date} to {c.travel_end_date})
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge tone={c.status === 'MANAGER_ENDORSED' ? 'warning' : 'info'}>{c.status}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold tabular-nums">{formatMoney(c.total_claimed_amount)}</td>
+                    <td className="px-4 py-3 text-right">
+                      <Link to="/expenses">
+                        <Button size="sm" variant={c.status === 'FINANCE_APPROVED' ? 'primary' : 'secondary'}>
+                          {c.status === 'FINANCE_APPROVED' ? 'Record UTR' : 'Audit'}
+                        </Button>
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function VendorDashboard({ user }: { user: UserProfile }) {
+  const ordersQuery = useQuery({
+    queryKey: ['requests', 'vendor-orders'],
+    queryFn: () => fetchRequests({ mine: false, page_size: 50 }),
+  });
+
+  const orders = ordersQuery.data?.items ?? [];
+  const readyOrders = orders.filter((o) => o.status === 'READY_FOR_VENDOR' || o.status === 'APPROVED');
+  const bookedOrders = orders.filter((o) => o.status === 'BOOKED');
+  const hotelOrders = readyOrders.filter((o) => o.request_type === 'HOTEL');
+  const cabOrders = readyOrders.filter((o) => o.request_type === 'LOCAL_CAB');
+
+  return (
+    <div className="space-y-6">
+      {/* Hero Card */}
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-r from-purple-500/10 via-indigo-500/5 to-transparent p-6 shadow-sm">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xl font-bold tracking-tight text-text">Contracted Partner Fulfillment Portal</span>
+              <Badge tone="neutral" className="bg-purple-100 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300">
+                Vendor Partner
+              </Badge>
+            </div>
+            <p className="text-sm text-text-muted">
+              {user.vendor_name ? `${user.vendor_name} · ` : ''}
+              Fulfill approved requests, submit 2–5 hotel proposals, dispatch cabs/drivers, and issue booking vouchers.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link to="/approvals">
+              <Button size="sm">
+                <Store size={14} /> Dispatched Orders ({readyOrders.length})
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* 4 Action Cards */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Link to="/approvals" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-purple-500/10 text-purple-600 dark:text-purple-400">
+              <Store size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Orders for Dispatch</h4>
+          <p className="mt-1 text-xs text-text-muted">View requests ready for vendor fulfillment across Flight, Cab, and Hotel.</p>
+        </Link>
+
+        <Link to="/approvals" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400">
+              <BedDouble size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Hotel Proposals</h4>
+          <p className="mt-1 text-xs text-text-muted">Submit 2–5 hotel choices with nightly rates, street addresses, and maps links.</p>
+        </Link>
+
+        <Link to="/approvals" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+              <Car size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Cab & Driver Details</h4>
+          <p className="mt-1 text-xs text-text-muted">Input vehicle model, registration number plate, and driver mobile phone.</p>
+        </Link>
+
+        <Link to="/approvals" className="group rounded-xl border border-border bg-surface p-4 transition-all hover:border-brand-strong hover:shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <FileCheck size={20} />
+            </div>
+            <ArrowUpRight size={16} className="text-text-subtle transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-strong" />
+          </div>
+          <h4 className="mt-3 font-semibold text-text">Confirmed Vouchers</h4>
+          <p className="mt-1 text-xs text-text-muted">Upload final confirmed hotel booking vouchers or e-ticket PDFs.</p>
+        </Link>
+      </div>
+
+      {/* KPI Tiles */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Link to="/approvals">
+          <StatTile
+            label="Dispatched orders"
+            value={ordersQuery.isPending ? '—' : String(readyOrders.length)}
+            hint="Ready for fulfillment"
+            tone={readyOrders.length > 0 ? 'warning' : 'default'}
+            icon={<Store size={15} />}
+          />
+        </Link>
+        <StatTile
+          label="Hotel sourcing orders"
+          value={ordersQuery.isPending ? '—' : String(hotelOrders.length)}
+          hint="Requires 2-5 proposals"
+          icon={<BedDouble size={15} />}
+        />
+        <StatTile
+          label="Cab hire dispatches"
+          value={ordersQuery.isPending ? '—' : String(cabOrders.length)}
+          hint="Driver & vehicle required"
+          icon={<Car size={15} />}
+        />
+        <StatTile
+          label="Completed bookings"
+          value={ordersQuery.isPending ? '—' : String(bookedOrders.length)}
+          hint="Vouchers issued"
+          icon={<CheckCircle2 size={15} />}
+        />
+      </div>
+
+      {/* Dispatches Table */}
+      <Card>
+        <CardHeader
+          title={`Active fulfillment orders (${readyOrders.length})`}
+          description="Requests dispatched to your agency for vehicle assignment, hotel proposals, or voucher issuance."
+          action={
+            <Link to="/approvals">
+              <Button size="sm" variant="secondary">Open Fulfillment Queue</Button>
+            </Link>
+          }
+        />
+        {readyOrders.length === 0 ? (
+          <p className="p-8 text-center text-xs text-text-subtle">No orders currently dispatched to your agency.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-text-muted">
+                  <th className="px-4 py-2.5 font-medium">Request #</th>
+                  <th className="px-4 py-2.5 font-medium">Type</th>
+                  <th className="px-4 py-2.5 font-medium">Traveller</th>
+                  <th className="px-4 py-2.5 font-medium">Location</th>
+                  <th className="px-4 py-2.5 font-medium">Priority</th>
+                  <th className="px-4 py-2.5 text-right font-medium">Fulfill</th>
+                </tr>
+              </thead>
+              <tbody className={cn('divide-y divide-border', ZEBRA_ROWS)}>
+                {readyOrders.slice(0, 6).map((req) => (
+                  <tr key={req.id}>
+                    <td className="px-4 py-3 font-mono font-medium">#{req.id}</td>
+                    <td className="px-4 py-3">
+                      <Badge tone="neutral">{REQUEST_TYPE_LABELS[req.request_type]}</Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{req.requester_name}</div>
+                      <div className="text-2xs text-text-subtle">{req.project_code || 'General'}</div>
+                    </td>
+                    <td className="px-4 py-3 text-text-muted">
+                      {req.request_type === 'HOTEL' ? req.hotel_city : `${req.pickup_city || req.origin} → ${req.drop_city || req.destination}`}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge tone={req.priority === 'HIGH' ? 'danger' : 'neutral'}>{req.priority}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <Link to="/approvals">
+                        <Button size="sm" variant="primary">Fulfill</Button>
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const user = useAuth((s) => s.user);
 
-  // The operational picture, for the people who act on it. Ground staff get
-  // their own travel below instead - nothing in the admin half is theirs to do.
   const isAdmin = isAdminRole(user?.role);
   const firstName = user?.full_name.split(/\s+/)[0] ?? 'there';
 
@@ -527,15 +1275,21 @@ export default function DashboardPage() {
         title={`Welcome back, ${firstName}`}
         description={
           isAdmin
-            ? 'Filter by dates, campaign, person or destination. Every number below follows.'
-            : 'Raise a request from My requests. Decisions and tickets arrive in your notifications.'
+            ? 'Central Operations Desk: Filter by dates, campaign, person or destination. All metrics follow.'
+            : user?.role === 'FINANCE'
+            ? 'Corporate Finance & Settlement Desk: Audit daily allowances, line deductions, and bank payouts.'
+            : user?.role === 'MANAGER'
+            ? 'Team Management & Approvals Desk: Review travel requests, endorse claims, and configure team occupancy.'
+            : user?.role === 'VENDOR'
+            ? 'Contracted Fulfillment Partner Desk: Submit hotel proposals, assign cabs/drivers, and issue confirmed tickets.'
+            : 'Ground Staff Field Operations: Raise travel requests, track telemetry, and claim reimbursements.'
         }
         actions={
-          !isAdmin && (
-            <Link to="/requests">
+          user?.role === 'GROUND_STAFF' && (
+            <Link to="/requests?action=new">
               <Button>
                 <CalendarCheck size={16} />
-                My requests
+                Raise Request
               </Button>
             </Link>
           )
@@ -544,19 +1298,10 @@ export default function DashboardPage() {
 
       {isAdmin && <EmailProblemBanner />}
       {isAdmin && <AdminDashboard />}
-
-      {/* Ground staff see their own movements. */}
-      {!isAdmin && user && (
-        <Card>
-          <CardHeader
-            title="Your travel"
-            description="Every trip you were on, including ones a colleague raised."
-          />
-          <div className="px-4 py-4 sm:px-5">
-            <TravelHistoryPanel userId={user.id} compact />
-          </div>
-        </Card>
-      )}
+      {!isAdmin && user?.role === 'FINANCE' && <FinanceDashboard user={user} />}
+      {!isAdmin && user?.role === 'VENDOR' && <VendorDashboard user={user} />}
+      {!isAdmin && user?.role === 'MANAGER' && <ManagerDashboard user={user} />}
+      {!isAdmin && (!user?.role || user?.role === 'GROUND_STAFF') && user && <GroundStaffDashboard user={user} />}
     </div>
   );
 }

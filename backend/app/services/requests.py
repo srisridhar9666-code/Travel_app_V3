@@ -30,13 +30,17 @@ from app.core import clock
 from app.core.enums import (
     ACTIVE_TRAVELLER_STATUSES,
     ADMIN_ROLES,
+    OPS_ADMIN_ROLES,
     AuditAction,
     CancellationStatus,
+    HotelOccupancy,
+    NotificationCategory,
     NotificationChannel,
     NotificationStatus,
     RequestPriority,
     RequestStatus,
     RequestType,
+    Role,
     RoomSharingChoice,
     TicketStatus,
     TravellerStatus,
@@ -49,6 +53,7 @@ from app.models.project import Project
 from app.models.request import RequestRevision, RequestTraveller, TravelRequest
 from app.models.ticket import TicketDocument
 from app.models.user import User
+from app.services import policy
 from app.schemas.request import (
     EDITABLE_FIELDS,
     ConflictRead,
@@ -167,12 +172,15 @@ def travel_date_passed(request: TravelRequest, *, today: date | None = None) -> 
 
 def status_of(request: TravelRequest) -> RequestStatus:
     """The one place a request-level status is produced."""
-    return derive_request_status(
+    base = derive_request_status(
         request.traveller_statuses,
         is_draft=request.is_draft,
         is_cancelled=request.is_cancelled,
         travel_date_passed=travel_date_passed(request),
     )
+    if base is RequestStatus.APPROVED and getattr(request, "assigned_vendor_id", None) is not None:
+        return RequestStatus.READY_FOR_VENDOR
+    return base
 
 
 def assert_editable(request: TravelRequest) -> None:
@@ -467,6 +475,9 @@ def check_costay(
     """Colleagues the requester could share a room with, already gender-filtered."""
     if request.request_type is not RequestType.HOTEL or request.check_in is None:
         return []
+    hotel_name = None
+    if getattr(request, "selected_hotel_proposal", None):
+        hotel_name = request.selected_hotel_proposal.hotel_name
     matches = costay.find_matches(
         db,
         tenant_id=tenant_id,
@@ -475,6 +486,7 @@ def check_costay(
         check_in=request.check_in,
         check_out=request.check_out,
         exclude_request_id=request.id,
+        hotel_name=hotel_name,
     )
     return [CoStayMatchRead(**vars(m)) for m in matches]
 
@@ -493,6 +505,9 @@ def room_matches_for(db: Session, *, tenant_id: str, request: TravelRequest) -> 
         or request.check_in is None
     ):
         return {}
+    hotel_name = None
+    if getattr(request, "selected_hotel_proposal", None):
+        hotel_name = request.selected_hotel_proposal.hotel_name
     out: dict[int, list[CoStayMatchRead]] = {}
     for traveller in request.travellers:
         if traveller.user is None or traveller.status not in ACTIVE_TRAVELLER_STATUSES:
@@ -507,6 +522,7 @@ def room_matches_for(db: Session, *, tenant_id: str, request: TravelRequest) -> 
             check_in=request.check_in,
             check_out=request.check_out,
             exclude_request_id=request.id,
+            hotel_name=hotel_name,
         )
         if matches:
             out[traveller.id] = [CoStayMatchRead(**vars(m)) for m in matches]
@@ -664,6 +680,7 @@ def _traveller_read(
         ticket_files=(files or {}).get(t.id, []),
         manager_id=manager.id if manager else None,
         manager_name=manager.full_name if manager else None,
+        manager_reviewed=t.manager_recommendation is not None,
         manager_recommendation=t.manager_recommendation if review else None,
         manager_comment=t.manager_comment if review else None,
         manager_reviewed_at=t.manager_reviewed_at if review else None,
@@ -710,7 +727,14 @@ def to_read(
     show an admin or a manager the recommendations they may see. A caller that
     passes `viewer` need not pass `reader`.
     """
-    show_cost = viewer is not None and viewer.is_admin
+    show_cost = viewer is not None and (
+        viewer.is_admin
+        or (
+            viewer.is_vendor
+            and viewer.vendor_id is not None
+            and getattr(request, "assigned_vendor_id", None) == viewer.vendor_id
+        )
+    )
     reader = reader or viewer
     # Only the admin queue asks: ticket files are admin-only to fetch, and the
     # export and single reads have no use for the extra query per request.
@@ -764,11 +788,27 @@ def to_read(
         start_at=request.start_at,
         end_at=request.end_at,
         hotel_city=request.hotel_city,
+        hotel_occupancy=getattr(request, "hotel_occupancy", HotelOccupancy.SINGLE) or HotelOccupancy.SINGLE,
+        city_tier=policy.classify_city(request.hotel_city) if request.request_type is RequestType.HOTEL and request.hotel_city else None,
+        lodging_limit_per_night=policy.lodging_ceiling(request.hotel_city, getattr(request, "hotel_occupancy", HotelOccupancy.SINGLE) or HotelOccupancy.SINGLE) if request.request_type is RequestType.HOTEL and request.hotel_city else None,
         check_in=request.check_in,
         check_out=request.check_out,
+        hotel_verification_status=(
+            max(request.hotel_verifications, key=lambda v: v.id).status.value
+            if getattr(request, "hotel_verifications", None)
+            else None
+        ),
+        assigned_vendor_id=request.assigned_vendor_id,
+        assigned_vendor_name=request.assigned_vendor.name if request.assigned_vendor else None,
+        selected_hotel_proposal_id=request.selected_hotel_proposal_id,
         cab_type=request.cab_type,
         cab_trip=request.cab_trip,
         cab_distance_km=request.cab_distance_km,
+        cab_telemetry_status=(
+            max(request.cab_telemetries, key=lambda ct: ct.id).status.value
+            if getattr(request, "cab_telemetries", None)
+            else None
+        ),
         booked_cab_type=request.booked_cab_type,
         cab_vehicle_number=request.cab_vehicle_number,
         cab_driver_name=request.cab_driver_name,
@@ -902,9 +942,15 @@ def record_submission(
         actor=actor,
         request=http_request,
     )
-    return notify_admins_of_submission(
-        db, request=request, actor=actor, tenant_id=tenant_id
-    ) + notify_managers_of_submission(db, request=request, actor=actor, tenant_id=tenant_id)
+    mgr_queued = notify_managers_of_submission(db, request=request, actor=actor, tenant_id=tenant_id)
+    admin_queued = notify_admins_of_submission(
+        db,
+        request=request,
+        actor=actor,
+        tenant_id=tenant_id,
+        send_email=not bool(mgr_queued),
+    )
+    return admin_queued + mgr_queued
 
 
 def _cancel_needs_approval(request: TravelRequest, reader: User) -> bool:
@@ -935,19 +981,39 @@ def trip_summary(request: TravelRequest) -> str:
     return f"{line} ({asked})" if asked else line
 
 
-def notify_admins_of_submission(
-    db: Session, *, request: TravelRequest, actor: User, tenant_id: str
-) -> list[int]:
-    """Tell every admin a request is waiting for a decision.
+def _ops_admins(
+    db: Session, *, tenant_id: str, exclude_user_id: int | None = None
+) -> list[User]:
+    """Operational travel-desk admins (excludes SUPER_ADMIN)."""
+    filters = [
+        User.tenant_id == tenant_id,
+        User.role.in_(OPS_ADMIN_ROLES),
+        User.is_active.is_(True),
+    ]
+    if exclude_user_id is not None:
+        filters.append(User.id != exclude_user_id)
+    return list(db.execute(select(User).where(*filters)).scalars().all())
 
-    In app always; by email unless the admin has switched "New requests" off.
-    The admin who raised it is not told about their own request.
+
+def notify_admins_of_submission(
+    db: Session,
+    *,
+    request: TravelRequest,
+    actor: User,
+    tenant_id: str,
+    send_email: bool = True,
+) -> list[int]:
+    """Tell admins a request is waiting for a decision.
+
+    In app for operational admins; by email only when no manager loop email
+    already copied them. Super Admin never receives request submission emails.
     """
-    admins = (
+    ops_admins = _ops_admins(db, tenant_id=tenant_id, exclude_user_id=actor.id)
+    super_admins = list(
         db.execute(
             select(User).where(
                 User.tenant_id == tenant_id,
-                User.role.in_(ADMIN_ROLES),
+                User.role == Role.SUPER_ADMIN,
                 User.is_active.is_(True),
                 User.id != actor.id,
             )
@@ -955,7 +1021,7 @@ def notify_admins_of_submission(
         .scalars()
         .all()
     )
-    if not admins:
+    if not ops_admins and not super_admins:
         return []
 
     summary = trip_summary(request)
@@ -969,60 +1035,73 @@ def notify_admins_of_submission(
     urgent = priority is RequestPriority.HIGH
     extending = request.extends if request.extends_request_id else None
 
-    queued: list[int] = []
-    for admin in admins:
-        greeting = admin.full_name.split()[0] if admin.full_name else "there"
-        lines = [
-            f"Hello {greeting},",
-            "",
-            (
-                f"{actor.full_name} asked to extend request {extending.id}. It needs a decision."
-                if extending is not None
-                else f"{actor.full_name} raised a travel request that needs a decision."
-            ),
-            "",
-            summary,
-            f"Travellers: {names}",
-        ]
-        if extending is not None:
-            before = booking_label(extending)
-            lines.append(
-                f"Booked before as: {before}" if before else "The trip it extends is not booked yet."
-            )
-        if campaign:
-            lines.append(f"Campaign: {campaign}")
-        if request.travel_reason:
-            lines.append(f"Reason: {request.travel_reason}")
-        lines.append(f"Priority: {label}")
-        lines += ["", f"Review it: {link}"]
+    title = (
+        ("High priority: " if urgent else "")
+        + f"{actor.full_name} asked to extend request {extending.id}"
+        if extending is not None
+        else f"High-priority request from {actor.full_name}"
+        if urgent
+        else f"New request from {actor.full_name}"
+    )
+    body = f"{summary} - for {names}. Priority: {label}."
+    email_subject = (
+        ("High priority - " if urgent else "")
+        + ("Extension asked: " if extending is not None else "New travel request: ")
+        + summary
+    )[:255]
 
-        rows = notifications.notify(
+    lines = [
+        "Hello Travel Desk,",
+        "",
+        (
+            f"{actor.full_name} asked to extend request {extending.id}. It needs a decision."
+            if extending is not None
+            else f"{actor.full_name} raised a travel request that needs a decision."
+        ),
+        "",
+        summary,
+        f"Travellers: {names}",
+    ]
+    if extending is not None:
+        before = booking_label(extending)
+        lines.append(
+            f"Booked before as: {before}" if before else "The trip it extends is not booked yet."
+        )
+    if campaign:
+        lines.append(f"Campaign: {campaign}")
+    if request.travel_reason:
+        lines.append(f"Reason: {request.travel_reason}")
+    lines.append(f"Priority: {label}")
+    lines += ["", f"Review it: {link}"]
+
+    queued: list[int] = []
+    if ops_admins:
+        rows = notifications.notify_group(
             db,
             tenant_id=tenant_id,
-            user=admin,
+            people=ops_admins,
             kind="REQUEST_SUBMITTED",
-            title=(
-                ("High priority: " if urgent else "")
-                + f"{actor.full_name} asked to extend request {extending.id}"
-                if extending is not None
-                else f"High-priority request from {actor.full_name}"
-                if urgent
-                else f"New request from {actor.full_name}"
-            ),
-            body=f"{summary} - for {names}. Priority: {label}.",
+            title=title,
+            body=body,
             request_id=request.id,
-            email_subject=(
-                ("High priority - " if urgent else "")
-                + ("Extension asked: " if extending is not None else "New travel request: ")
-                + summary
-            )[:255],
+            email_subject=email_subject,
             email_body="\n".join(lines),
+            send_email=send_email,
             deliver_now=False,
         )
-        queued += [
-            r.id for r in rows
-            if r.channel == NotificationChannel.EMAIL and r.status == NotificationStatus.QUEUED
-        ]
+        queued += queued_emails(rows)
+
+    for sa_user in super_admins:
+        notifications.notify(
+            db,
+            tenant_id=tenant_id,
+            user=sa_user,
+            kind="REQUEST_SUBMITTED",
+            title=title,
+            body=body,
+            request_id=request.id,
+            send_email=False,
+        )
     return queued
 
 
@@ -1068,6 +1147,13 @@ def notify_managers_of_submission(
     link = f"{get_settings().frontend_base_url.rstrip('/')}/team-approvals"
     campaign = f"{request.project.code} - {request.project.name}" if request.project else None
     label = (request.priority or RequestPriority.MEDIUM).value.title()
+    extending = request.extends if request.extends_request_id else None
+
+    admin_cc = [
+        u
+        for u in _ops_admins(db, tenant_id=tenant_id, exclude_user_id=actor.id)
+        if notifications.wants(db, u, NotificationCategory.NEW_REQUESTS, NotificationChannel.EMAIL)
+    ]
 
     queued: list[int] = []
     for manager, members in teams_on(request).values():
@@ -1097,11 +1183,21 @@ def notify_managers_of_submission(
             summary,
             f"Your team on it: {names}",
         ]
+        if extending is not None:
+            before = booking_label(extending)
+            lines.append(
+                f"Booked before as: {before}" if before else "The trip it extends is not booked yet."
+            )
         if campaign:
             lines.append(f"Campaign: {campaign}")
         if request.travel_reason:
             lines.append(f"Reason: {request.travel_reason}")
         lines.append(f"Priority: {label}")
+        cc_for_manager = [u for u in admin_cc if u.id != manager.id]
+        if cc_for_manager:
+            lines.append(
+                f"Admins copied on this loop: {', '.join(u.full_name for u in cc_for_manager)}"
+            )
         lines += [
             "",
             "Recommend it or not, with a comment. An admin makes the final decision "
@@ -1119,6 +1215,7 @@ def notify_managers_of_submission(
                 request_id=request.id,
                 email_subject=f"{title}: {summary}"[:255],
                 email_body="\n".join(lines),
+                cc_users=cc_for_manager or None,
                 deliver_now=False,
             )
         )

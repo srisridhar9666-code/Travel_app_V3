@@ -32,6 +32,7 @@ import { dayLabel, lastMonth, sumAmounts } from '@/lib/invoices';
 import { todayInIndia } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { VENDOR_KIND_LABELS, type EligibleRow, type Invoice, type InvoicePayload } from '@/types';
+import { useAuth } from '@/store/auth';
 
 /**
  * Preparing a vendor's invoice: pick the vendor and the period, then tick the
@@ -114,17 +115,19 @@ function whyText(why: WhyNotListed | undefined, includeUnassigned: boolean): str
 function InvoiceForm({ invoice }: { invoice: Invoice | null }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const user = useAuth((s) => s.user);
+  const isVendor = user?.role === 'VENDOR';
   const vendors = useVendors();
   const initial = invoice
     ? { start: invoice.period_start, end: invoice.period_end }
     : lastMonth();
 
-  const [vendorId, setVendorId] = useState<number | ''>(invoice?.vendor_id ?? '');
+  const initialVendorId = isVendor && user?.vendor_id ? user.vendor_id : (invoice?.vendor_id ?? '');
+  const [vendorId, setVendorId] = useState<number | ''>(initialVendorId);
   const [start, setStart] = useState(initial.start);
   const [end, setEnd] = useState(initial.end);
-  // On by default: trips booked before vendors were recorded have none, and
-  // hiding them made a vendor look as if it had nothing to bill.
-  const [includeUnassigned, setIncludeUnassigned] = useState(true);
+  // Vendors only bill their own assigned trips; admins see unassigned too
+  const [includeUnassigned, setIncludeUnassigned] = useState(!isVendor);
   const [selected, setSelected] = useState<Set<number>>(
     () => new Set(invoice?.lines.map((line) => line.traveller_id) ?? []),
   );
@@ -263,20 +266,32 @@ function InvoiceForm({ invoice }: { invoice: Invoice | null }) {
         <CardHeader title="Vendor and period" />
         <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5 lg:grid-cols-4">
           <Field label="Vendor" htmlFor="invoice-vendor" required className="sm:col-span-2">
-            <Select
-              id="invoice-vendor"
-              value={vendorId === '' ? '' : String(vendorId)}
-              onChange={(e) => setVendorId(e.target.value === '' ? '' : Number(e.target.value))}
-              disabled={vendors.isPending}
-            >
-              <option value="">{vendors.isPending ? 'Loading vendors…' : 'Choose the vendor'}</option>
-              {vendorList.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name} · {VENDOR_KIND_LABELS[v.kind]}
-                  {v.is_active ? '' : ' (switched off)'}
-                </option>
-              ))}
-            </Select>
+            {isVendor ? (
+              <Input
+                id="invoice-vendor"
+                value={
+                  vendor
+                    ? `${vendor.name} · ${VENDOR_KIND_LABELS[vendor.kind]}`
+                    : 'Your Contracted Services'
+                }
+                disabled
+              />
+            ) : (
+              <Select
+                id="invoice-vendor"
+                value={vendorId === '' ? '' : String(vendorId)}
+                onChange={(e) => setVendorId(e.target.value === '' ? '' : Number(e.target.value))}
+                disabled={vendors.isPending}
+              >
+                <option value="">{vendors.isPending ? 'Loading vendors…' : 'Choose the vendor'}</option>
+                {vendorList.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name} · {VENDOR_KIND_LABELS[v.kind]}
+                    {v.is_active ? '' : ' (switched off)'}
+                  </option>
+                ))}
+              </Select>
+            )}
           </Field>
           <Field label="From" htmlFor="invoice-start" required>
             <Input
@@ -323,15 +338,17 @@ function InvoiceForm({ invoice }: { invoice: Invoice | null }) {
             >
               This month so far
             </Button>
-            <label className="ml-auto flex items-center gap-2 text-xs text-text-muted">
-              <input
-                type="checkbox"
-                checked={includeUnassigned}
-                onChange={(e) => setIncludeUnassigned(e.target.checked)}
-                className="h-4 w-4 accent-[rgb(var(--primary))]"
-              />
-              Also list trips with no vendor recorded
-            </label>
+            {!isVendor && (
+              <label className="ml-auto flex items-center gap-2 text-xs text-text-muted">
+                <input
+                  type="checkbox"
+                  checked={includeUnassigned}
+                  onChange={(e) => setIncludeUnassigned(e.target.checked)}
+                  className="h-4 w-4 accent-[rgb(var(--primary))]"
+                />
+                Also list trips with no vendor recorded
+              </label>
+            )}
           </div>
         </div>
       </Card>
@@ -384,6 +401,7 @@ function InvoiceForm({ invoice }: { invoice: Invoice | null }) {
                       className="h-4 w-4 accent-[rgb(var(--primary))]"
                     />
                   </th>
+                  <th className="px-2 py-2.5 font-medium">Txn ID</th>
                   <th className="px-2 py-2.5 font-medium">Date</th>
                   <th className="px-2 py-2.5 font-medium">Traveller</th>
                   <th className="hidden px-2 py-2.5 font-medium md:table-cell">Trip</th>
@@ -507,12 +525,17 @@ function TripRow({ row, ticked, onToggle }: { row: EligibleRow; ticked: boolean;
           className="h-4 w-4 accent-[rgb(var(--primary))]"
         />
       </td>
+      <td className="whitespace-nowrap px-2 py-2.5 align-top text-xs">
+        <span className="inline-flex items-center rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-xs font-semibold text-text ring-1 ring-inset ring-border">
+          #{row.request_id}
+        </span>
+      </td>
       <td className="whitespace-nowrap px-2 py-2.5 align-top text-xs">{dayLabel(row.travel_date)}</td>
       <td className="px-2 py-2.5 align-top">
         <p className="font-medium">{row.traveller_name}</p>
         <p className="text-2xs text-text-subtle">
           {row.employee_code && `${row.employee_code} · `}
-          {row.booking_reference ? `Ref ${row.booking_reference}` : `Request ${row.request_id}`}
+          {row.booking_reference ? `Ref ${row.booking_reference}` : `Txn #${row.request_id}`}
           {row.vendor_id === null && ' · no vendor recorded'}
         </p>
         <p className="text-2xs text-text-muted md:hidden">{row.trip}</p>

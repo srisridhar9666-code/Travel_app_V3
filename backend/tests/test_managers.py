@@ -97,8 +97,7 @@ class TestRoleRanks:
         ("admin", "MANAGER", True),
         ("admin", "ADMIN", True),
         ("admin", "SUPER_ADMIN", False),
-        ("sysadmin", "SUPER_ADMIN", False),
-        ("sysadmin", "SUPER_ADMIN", False),
+        ("sysadmin", "SUPER_ADMIN", True),  # Super Admin and System Admin both are same
         ("owner", "SUPER_ADMIN", True),
     ])
     def test_nobody_grants_a_role_above_their_own(self, client, org, granter, role, allowed):

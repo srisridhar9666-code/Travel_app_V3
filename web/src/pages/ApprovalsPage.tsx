@@ -19,7 +19,7 @@ import {
   Gavel,
   UserCheck,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { BookingModal } from '@/components/BookingModal';
@@ -34,6 +34,9 @@ import {
 } from '@/components/CabDetails';
 import { ManagerReview } from '@/components/ManagerReview';
 import { CancellationAsks } from '@/components/CancellationAsks';
+import { CabTelemetryCard } from '@/components/CabTelemetryCard';
+import { HotelProposalsCard } from '@/components/HotelProposalsCard';
+import { HotelStayVerificationCard } from '@/components/HotelStayVerificationCard';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
 import { ConflictList } from '@/components/RequestForm';
@@ -41,6 +44,7 @@ import { RoomAllotment } from '@/components/RoomSharing';
 import CostPanel from '@/components/CostPanel';
 import { formatMoney } from '@/components/charts';
 import { PhoneBadge } from '@/components/PhoneBadge';
+import { RequestTelemetryBadge } from '@/components/RequestTelemetryBadge';
 import { RequestTripHighlight } from '@/components/RequestTripHighlight';
 import { TicketFilesModal, fileCount } from '@/components/TicketFiles';
 import { VendorSelect, sharedVendor } from '@/components/VendorSelect';
@@ -49,6 +53,7 @@ import {
   Button,
   Card,
   CardHeader,
+  DateRangeFilter,
   EmptyState,
   Field,
   Input,
@@ -57,6 +62,7 @@ import {
   ItemNumber,
   Select,
   Skeleton,
+  tabButtonClass,
 } from '@/components/ui';
 import {
   decideBatch,
@@ -75,12 +81,15 @@ import {
   cabAsked,
   campaignLabel,
   dayTime,
+  isTripActive,
+  matchesDateRange,
   REQUEST_ACCENT,
   revisionField,
   revisionValue,
 } from '@/lib/requests';
-import { fileStamp, formatInstant, parseInstant, sheetInstant } from '@/lib/time';
+import { fileStamp, formatInstant, parseInstant, sheetInstant, todayInIndia } from '@/lib/time';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/store/auth';
 import {
   CAB_TYPE_LABELS,
   DESIGNATION_LABELS,
@@ -109,6 +118,7 @@ const STATUS_TONE: Record<RequestStatus, 'neutral' | 'info' | 'success' | 'warni
   SUBMITTED: 'info',
   PARTIALLY_APPROVED: 'warning',
   APPROVED: 'success',
+  READY_FOR_VENDOR: 'info',
   BOOKED: 'success',
   REJECTED: 'danger',
   CANCELLED: 'neutral',
@@ -139,11 +149,19 @@ const TABS: { key: TabKey; label: string; countKey: keyof CountShape }[] = [
   { key: 'SUBMITTED', label: 'Awaiting', countKey: 'awaiting' },
   { key: 'PARTIALLY_APPROVED', label: 'Partly approved', countKey: 'partially_approved' },
   { key: 'APPROVED', label: 'Approved', countKey: 'approved' },
+  { key: 'READY_FOR_VENDOR', label: 'Ready for Vendor', countKey: 'ready_for_vendor' },
   { key: 'BOOKED', label: 'Booked', countKey: 'booked' },
   { key: 'EXPIRED', label: 'Expired', countKey: 'expired' },
   { key: 'REJECTED', label: 'Rejected', countKey: 'rejected' },
   // Nowhere else shows other people's cancelled requests: My requests is only
   // the admin's own, and the travel log leaves cancelled trips out.
+  { key: 'CANCELLED', label: 'Cancelled', countKey: 'cancelled' },
+];
+
+/** Clean queue tabs for vendor role: only shows relevant order statuses */
+const VENDOR_TABS: { key: TabKey; label: string; countKey: keyof CountShape }[] = [
+  { key: 'READY_FOR_VENDOR', label: 'Ready for Booking', countKey: 'ready_for_vendor' },
+  { key: 'BOOKED', label: 'Booked Orders', countKey: 'booked' },
   { key: 'CANCELLED', label: 'Cancelled', countKey: 'cancelled' },
 ];
 
@@ -155,6 +173,7 @@ type CountShape = {
   awaiting: number;
   partially_approved: number;
   approved: number;
+  ready_for_vendor: number;
   booked: number;
   rejected: number;
   cancelled: number;
@@ -249,7 +268,7 @@ const COMMON_COLUMNS: ExportColumn[] = [
     header: 'Manager recommendation',
     value: (_, t) =>
       t.manager_recommendation
-        ? `${RECOMMENDATION_LABELS[t.manager_recommendation]}${t.manager_comment ? ` - ${t.manager_comment}` : ''}`
+        ? `${RECOMMENDATION_LABELS[t.manager_recommendation]}${t.manager_comment ? ` - ${t.manager_comment}` : ''}${t.manager_reviewed_at ? ` (${dayTime(t.manager_reviewed_at)})` : ''}`
         : t.manager_name
           ? 'Not given'
           : '',
@@ -289,6 +308,7 @@ const TAB_COLUMNS: Record<TabKey, ExportColumn[]> = {
   SUBMITTED: [WAITING_DAYS, CLASHES],
   PARTIALLY_APPROVED: [CLASHES, ...DECIDED, PNR, COST],
   APPROVED: [...DECIDED, COST, COST_NOTE],
+  READY_FOR_VENDOR: [...DECIDED, COST, COST_NOTE],
   BOOKED: [...DECIDED, PNR, COST, COST_NOTE, COST_BY],
   EXPIRED: [WAITING_DAYS],
   REJECTED: DECIDED,
@@ -533,8 +553,19 @@ interface PendingDecision {
 
 export default function ApprovalsPage() {
   const queryClient = useQueryClient();
+  const me = useAuth((s) => s.user);
+  const isVendor = me?.role === 'VENDOR' || Boolean(me?.is_vendor);
+  const visibleTabs = isVendor ? VENDOR_TABS : TABS;
 
-  const [tab, setTabState] = useState<TabKey>('SUBMITTED');
+  const [tab, setTabState] = useState<TabKey>(() => (isVendor ? 'READY_FOR_VENDOR' : 'SUBMITTED'));
+  const [approvalCabType, setApprovalCabType] = useState<CabType>('SEDAN');
+
+  useEffect(() => {
+    if (isVendor && !VENDOR_TABS.some((t) => t.key === tab)) {
+      setTabState('READY_FOR_VENDOR');
+    }
+  }, [isVendor, tab]);
+
   const [kind, setKindState] = useState<RequestType | ''>('');
   const [search, setSearchState] = useState('');
   const [priority, setPriorityState] = useState<RequestPriority | ''>('');
@@ -547,6 +578,8 @@ export default function ApprovalsPage() {
   const [pending, setPending] = useState<PendingDecision | null>(null);
   const [reason, setReason] = useState('');
   const [notify, setNotify] = useState(true);
+  const [approvalFulfilmentMode, setApprovalFulfilmentMode] = useState<'ADMIN' | 'VENDOR'>('ADMIN');
+  const [selectedVendorId, setSelectedVendorId] = useState<number | ''>('');
   // "Mark booked" opens the booking window for this traveller.
   const [booking, setBooking] = useState<{ request: TravelRequest; traveller: RequestTraveller } | null>(
     null,
@@ -560,6 +593,7 @@ export default function ApprovalsPage() {
   // The car sent, typed in Cab details.
   const [cabDraft, setCabDraft] = useState<CabDraft | null>(null);
   const [cabEditing, setCabEditing] = useState<TravelRequest | null>(null);
+  const [cabNotify, setCabNotify] = useState(true);
   // The cab operator paid, picked in Cab details. Null until the admin picks:
   // the queue list leaves vendors out, so what is recorded is read below.
   const [cabVendorPick, setCabVendorPick] = useState<number | '' | null>(null);
@@ -578,6 +612,10 @@ export default function ApprovalsPage() {
     null,
   );
   const [extensionComment, setExtensionComment] = useState('');
+  const [sortOrder, setSortOrder] = useState<'newest' | 'priority'>('newest');
+  const [tripScope, setTripScope] = useState<'ACTIVE' | 'PAST' | 'ALL'>('ACTIVE');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   // Any change to what is being looked at starts again from page 1; page 3 of
   // a different tab is not a place anyone meant to go.
@@ -620,7 +658,12 @@ export default function ApprovalsPage() {
   // The banners count the whole queue. The tab labels follow the search and
   // priority, as the list under them does: "Booked 12" over a high-priority
   // list of two read as the filter not working.
-  const counts = useQuery({ queryKey: ['queue-counts'], queryFn: () => fetchQueueCounts() });
+  const counts = useQuery({
+    queryKey: ['queue-counts'],
+    queryFn: () => fetchQueueCounts(),
+    refetchInterval: 10000,
+    refetchOnWindowFocus: true,
+  });
   const sliced = Boolean(
     filters.type || filters.search || filters.priority || filters.review || filters.extensions_only,
   );
@@ -642,17 +685,18 @@ export default function ApprovalsPage() {
   });
   const tabCounts = sliced ? slicedCounts.data : counts.data;
   const requests = useQuery({
-    queryKey: ['queue', tab, kind, search, priority, review, extensionsOnly, page, pageSize],
+    queryKey: ['queue', tab, kind, search, priority, review, extensionsOnly, page, pageSize, sortOrder],
     queryFn: () =>
       fetchRequests({
         mine: false,
         ...filters,
-        // High first on every tab, newest first within each.
-        sort: 'priority',
+        sort: sortOrder,
         page,
         page_size: pageSize,
       }),
     placeholderData: keepPreviousData,
+    refetchInterval: 10000,
+    refetchOnWindowFocus: true,
   });
 
   const refresh = () => {
@@ -698,16 +742,28 @@ export default function ApprovalsPage() {
       traveller: RequestTraveller;
       to: TravellerStatus;
       items: BatchDecisionItem[];
-    }) => decideBatch(vars.request.id, vars.items),
+      assigned_vendor_id?: number | null;
+      cab_type?: CabType;
+      openBookingAfter?: boolean;
+    }) =>
+      decideBatch(vars.request.id, vars.items, {
+        assigned_vendor_id: vars.assigned_vendor_id,
+        cab_type: vars.cab_type,
+      }),
     // This flow has its own error handling below (it can turn a refusal into
     // the override dialog), so the global toast stays out of it.
     meta: { errorToast: false },
-    onSuccess: (_, vars) => {
+    onSuccess: (data, vars) => {
       toast.success(
-        `${vars.traveller.full_name} ${TRAVELLER_STATUS_LABELS[vars.to].toLowerCase()}`,
+        vars.assigned_vendor_id
+          ? `${vars.traveller.full_name} approved and assigned to vendor!`
+          : `${vars.traveller.full_name} ${TRAVELLER_STATUS_LABELS[vars.to].toLowerCase()}`,
       );
       close();
       refresh();
+      if (vars.openBookingAfter) {
+        setBooking({ request: data ?? vars.request, traveller: vars.traveller });
+      }
     },
     onError: (err, vars) => {
       const message = errorMessage(err);
@@ -728,6 +784,8 @@ export default function ApprovalsPage() {
   function close() {
     setPending(null);
     setReason('');
+    setApprovalFulfilmentMode('ADMIN');
+    setSelectedVendorId('');
   }
 
   // Cabs whose travellers asked for one more day. They sit on whichever tab
@@ -787,6 +845,14 @@ export default function ApprovalsPage() {
     }
     setReason('');
     setNotify(true);
+    if (request.assigned_vendor_id) {
+      setApprovalFulfilmentMode('VENDOR');
+      setSelectedVendorId(request.assigned_vendor_id);
+    } else {
+      setApprovalFulfilmentMode('ADMIN');
+      setSelectedVendorId('');
+    }
+    setApprovalCabType(request.cab_type && request.cab_type !== 'NO_PREFERENCE' ? request.cab_type : 'SEDAN');
     setPending({ request, traveller, to, needsOverride: false });
   };
 
@@ -801,15 +867,46 @@ export default function ApprovalsPage() {
     // An override is recorded separately from the decision it justifies, so it
     // carries the same sentence rather than replacing it.
     if (pending.needsOverride) item.conflict_override_reason = reason;
+
+    let assignedVendorId: number | null | undefined = undefined;
+    if (pending.to === 'APPROVED') {
+      if (approvalFulfilmentMode === 'VENDOR') {
+        assignedVendorId = selectedVendorId ? Number(selectedVendorId) : null;
+      } else {
+        assignedVendorId = null;
+      }
+    }
+
     decide.mutate({
       request: pending.request,
       traveller: pending.traveller,
       to: pending.to,
       items: [item],
+      assigned_vendor_id: assignedVendorId,
+      cab_type: pending.request.request_type === 'LOCAL_CAB' && pending.to === 'APPROVED' ? approvalCabType : undefined,
     });
   };
 
-  const rows = requests.data?.items ?? [];
+  const today = todayInIndia();
+  const rawRows: TravelRequest[] = requests.data?.items ?? [];
+  const allRows: TravelRequest[] = useMemo(() => {
+    const dated = rawRows.filter((r) => matchesDateRange(r, dateFrom, dateTo));
+    if (sortOrder === 'newest') {
+      return [...dated].sort((a, b) => b.id - a.id);
+    }
+    return dated;
+  }, [rawRows, sortOrder, dateFrom, dateTo]);
+
+  const activeCount = allRows.filter((r: TravelRequest) => isTripActive(r, today)).length;
+  const pastCount = allRows.filter((r: TravelRequest) => !isTripActive(r, today)).length;
+
+  const rows: TravelRequest[] = useMemo(() => {
+    if (tab === 'BOOKED') {
+      if (tripScope === 'ACTIVE') return allRows.filter((r: TravelRequest) => isTripActive(r, today));
+      if (tripScope === 'PAST') return allRows.filter((r: TravelRequest) => !isTripActive(r, today));
+    }
+    return allRows;
+  }, [allRows, tripScope, tab, today]);
   const total = requests.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / (requests.data?.page_size ?? pageSize)));
   const countData = counts.data;
@@ -877,18 +974,140 @@ export default function ApprovalsPage() {
       )}
 
       <div className="space-y-4">
-        {/* The admin decides with the manager's view in front of them - or
-            knowing it has not come yet, which never stops them deciding. */}
+        {/* Manager L1 Review & Strict Two-Tier Policy Check */}
         {pending &&
         (pending.traveller.manager_recommendation || pending.traveller.manager_name) && (
           <div className="space-y-1.5">
-            <p className="text-xs font-medium">Manager’s recommendation</p>
+            <p className="text-xs font-semibold text-text">L1 Manager Review</p>
             <ManagerReview traveller={pending.traveller} />
-            {!pending.traveller.manager_recommendation && pending.traveller.status === 'PENDING' && (
-              <p className="text-2xs text-text-subtle">
-                You can decide now - the final decision is yours.
+            {pending.to === 'APPROVED' &&
+              pending.traveller.manager_id &&
+              pending.traveller.manager_recommendation !== 'RECOMMENDED' && (
+                <div className="rounded-md border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 p-2.5 text-xs text-amber-900 dark:text-amber-200">
+                  <span className="font-bold">L1 Manager Approval Required:</span> Admin approval is blocked by policy because{' '}
+                  {pending.traveller.manager_recommendation === 'NOT_RECOMMENDED'
+                    ? 'the direct manager has explicitly rejected this request.'
+                    : `${pending.traveller.manager_name || 'the manager'} has not approved this request yet.`}
+                </div>
+              )}
+          </div>
+        )}
+
+        {/* Admin Booking vs Vendor Assignment Fulfillment Mode */}
+        {pending?.to === 'APPROVED' && (
+          <div className="space-y-3 rounded-lg border border-border bg-surface-subtle p-3.5">
+            <div>
+              <p className="text-xs font-semibold text-text">Fulfilment & Booking Assignment</p>
+              <p className="text-2xs text-text-muted mt-0.5">
+                Choose whether you will book this request directly or assign it to an external vendor partner to fulfill.
               </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => setApprovalFulfilmentMode('ADMIN')}
+                className={`flex items-start gap-2.5 p-3 rounded-md border text-left transition-all ${
+                  approvalFulfilmentMode === 'ADMIN'
+                    ? 'border-brand bg-brand-soft/30 shadow-xs ring-1 ring-brand'
+                    : 'border-border bg-surface hover:bg-surface-hover'
+                }`}
+              >
+                <span className="text-lg">🏢</span>
+                <div>
+                  <span className="text-xs font-semibold text-text block">Book by myself (Admin)</span>
+                  <span className="text-2xs text-text-muted block mt-0.5 leading-snug">
+                    Travel desk will directly enter tickets, cab/flight details and record final costs.
+                  </span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setApprovalFulfilmentMode('VENDOR')}
+                className={`flex items-start gap-2.5 p-3 rounded-md border text-left transition-all ${
+                  approvalFulfilmentMode === 'VENDOR'
+                    ? 'border-brand bg-brand-soft/30 shadow-xs ring-1 ring-brand'
+                    : 'border-border bg-surface hover:bg-surface-hover'
+                }`}
+              >
+                <span className="text-lg">🤝</span>
+                <div>
+                  <span className="text-xs font-semibold text-text block">Assign to Vendor</span>
+                  <span className="text-2xs text-text-muted block mt-0.5 leading-snug">
+                    Dispatch to contracted vendor partner who will enter booking reference, tickets, and costs.
+                  </span>
+                </div>
+              </button>
+            </div>
+
+            {approvalFulfilmentMode === 'VENDOR' && (
+              <div className="pt-2.5 border-t border-border/70">
+                <Field
+                  label="Select Vendor Partner"
+                  htmlFor="assign-vendor-select"
+                  required
+                  hint="The selected vendor will see this request in their dashboard and fulfill it."
+                >
+                  <VendorSelect
+                    id="assign-vendor-select"
+                    value={selectedVendorId}
+                    onChange={(val) => setSelectedVendorId(val)}
+                    emptyLabel="-- Select contracted vendor partner --"
+                    className="w-full text-xs"
+                  />
+                </Field>
+              </div>
             )}
+          </div>
+        )}
+
+        {pending?.to === 'APPROVED' && pending.request.request_type === 'LOCAL_CAB' && (
+          <div className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-50/40 dark:bg-amber-950/20 p-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold text-text">Vehicle Category (Car Type)</p>
+              <span className="text-2xs text-text-muted">
+                Requested: {CAB_TYPE_LABELS[pending.request.cab_type || 'NO_PREFERENCE']}
+              </span>
+            </div>
+            <p className="text-2xs text-text-muted">
+              Specify or adjust the car class to assign so the vendor or driver knows which vehicle to book.
+            </p>
+            <div className="flex flex-wrap gap-3 pt-1">
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium">
+                <input
+                  type="radio"
+                  name="approval-cab-type"
+                  value="SEDAN"
+                  checked={approvalCabType === 'SEDAN'}
+                  onChange={() => setApprovalCabType('SEDAN')}
+                  className="h-4 w-4 accent-amber-600"
+                />
+                Dzire / Sedan (4 seats)
+              </label>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium">
+                <input
+                  type="radio"
+                  name="approval-cab-type"
+                  value="SUV"
+                  checked={approvalCabType === 'SUV'}
+                  onChange={() => setApprovalCabType('SUV')}
+                  className="h-4 w-4 accent-amber-600"
+                />
+                Ertiga / SUV (7 seats)
+              </label>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium">
+                <input
+                  type="radio"
+                  name="approval-cab-type"
+                  value="NO_PREFERENCE"
+                  checked={approvalCabType === 'NO_PREFERENCE'}
+                  onChange={() => setApprovalCabType('NO_PREFERENCE')}
+                  className="h-4 w-4 accent-amber-600"
+                />
+                No preference
+              </label>
+            </div>
           </div>
         )}
 
@@ -948,13 +1167,27 @@ export default function ApprovalsPage() {
       <Button
         variant={pending?.to === 'REJECTED' ? 'danger' : 'primary'}
         loading={decide.isPending}
-        disabled={reason.trim().length < 3}
+        disabled={
+          reason.trim().length < 3 ||
+          Boolean(
+            pending?.to === 'APPROVED' &&
+            pending.traveller.manager_id &&
+            pending.traveller.manager_recommendation !== 'RECOMMENDED'
+          ) ||
+          Boolean(
+            pending?.to === 'APPROVED' &&
+            approvalFulfilmentMode === 'VENDOR' &&
+            !selectedVendorId
+          )
+        }
         onClick={confirm}
       >
         {pending?.needsOverride
           ? 'Approve anyway'
           : pending?.to === 'APPROVED'
-            ? 'Approve traveller'
+            ? approvalFulfilmentMode === 'VENDOR'
+              ? 'Approve & Assign to Vendor'
+              : 'Approve for Admin Booking'
             : pending?.to === 'REJECTED'
               ? 'Reject traveller'
               : 'Cancel traveller'}
@@ -965,14 +1198,15 @@ export default function ApprovalsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Approvals</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{isVendor ? 'Assigned Orders & Bookings' : 'Approvals'}</h1>
         <p className="mt-1.5 max-w-2xl text-sm text-text-muted">
-          Every request awaiting fulfilment. Decisions are per person — a group request can be
-          partly approved, and each traveller is told their own answer.
+          {isVendor
+            ? 'Client travel requests assigned to your vendor desk for booking, hotel proposal sourcing, ticket uploading, and fulfillment.'
+            : 'Every request awaiting fulfilment. Decisions are per person — a group request can be partly approved, and each traveller is told their own answer.'}
         </p>
       </div>
 
-      {countData &&
+      {!isVendor && countData &&
         (urgent > 0 || countData.expired > 0 || countData.with_conflicts > 0 || countData.extensions > 0) && (
         <div className="flex flex-wrap gap-3">
           {countData.extensions > 0 && (
@@ -1142,35 +1376,40 @@ export default function ApprovalsPage() {
       )}
 
       <Card>
-        <div className="flex flex-wrap gap-1 border-b border-border px-3 py-2">
+        <div className="flex flex-wrap gap-1.5 border-b border-border bg-surface-sunken/30 px-4 py-2.5">
           {/* Expired - still waiting when the travel date passed - is shown
               only when something is in it (or it is the tab open). */}
-          {TABS.filter(
+          {visibleTabs.filter(
             (item) => item.key !== 'EXPIRED' || tab === 'EXPIRED' || (tabCounts?.expired ?? 0) > 0,
-          ).map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => setTab(item.key)}
-              aria-pressed={tab === item.key}
-              title={
-                item.key === 'EXPIRED'
-                  ? 'Requests whose travel date passed before anyone approved or rejected them'
-                  : undefined
-              }
-              className={cn(
-                'rounded-md px-2.5 py-1.5 text-xs transition-colors',
-                tab === item.key
-                  ? 'bg-surface-sunken font-medium text-text'
-                  : 'text-text-muted hover:bg-surface-sunken hover:text-text',
-              )}
-            >
-              {item.label}
-              {tabCounts && (
-                <span className="ml-1.5 text-text-subtle">{tabCounts[item.countKey]}</span>
-              )}
-            </button>
-          ))}
+          ).map((item) => {
+            const active = tab === item.key;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setTab(item.key)}
+                aria-pressed={active}
+                title={
+                  item.key === 'EXPIRED'
+                    ? 'Requests whose travel date passed before anyone approved or rejected them'
+                    : undefined
+                }
+                className={tabButtonClass(active)}
+              >
+                <span>{item.label}</span>
+                {tabCounts && (
+                  <span
+                    className={cn(
+                      'rounded-full px-1.5 py-0 text-2xs tabular-nums',
+                      active ? 'bg-primary-fg/15 text-primary-fg' : 'bg-surface-sunken text-text-subtle',
+                    )}
+                  >
+                    {tabCounts[item.countKey]}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         <CardHeader
@@ -1216,6 +1455,99 @@ export default function ApprovalsPage() {
               </option>
             ))}
           </Select>
+          <Select
+            value={sortOrder}
+            onChange={(e) => {
+              setSortOrder(e.target.value as 'newest' | 'priority');
+              setPage(1);
+            }}
+            aria-label="Sort order"
+            className="w-36"
+          >
+            <option value="newest">Newest first</option>
+            <option value="priority">Priority first</option>
+          </Select>
+          <DateRangeFilter
+            from={dateFrom}
+            to={dateTo}
+            onFromChange={(v) => {
+              setDateFrom(v);
+              setPage(1);
+            }}
+            onToChange={(v) => {
+              setDateTo(v);
+              setPage(1);
+            }}
+            onClear={() => {
+              setDateFrom('');
+              setDateTo('');
+              setPage(1);
+            }}
+          />
+          {tab === 'BOOKED' && (
+            <div className="flex rounded-lg border border-border/70 p-0.5 bg-surface-raised text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setTripScope('ACTIVE');
+                  setPage(1);
+                }}
+                className={tabButtonClass(tripScope === 'ACTIVE')}
+              >
+                <span>Active Bookings</span>
+                <span
+                  className={cn(
+                    'rounded-full px-1.5 py-0 text-2xs tabular-nums',
+                    tripScope === 'ACTIVE'
+                      ? 'bg-primary-fg/15 text-primary-fg'
+                      : 'bg-info-soft text-info',
+                  )}
+                >
+                  {activeCount}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTripScope('PAST');
+                  setPage(1);
+                }}
+                className={tabButtonClass(tripScope === 'PAST')}
+              >
+                <span>Past / Old</span>
+                <span
+                  className={cn(
+                    'rounded-full px-1.5 py-0 text-2xs tabular-nums',
+                    tripScope === 'PAST'
+                      ? 'bg-primary-fg/15 text-primary-fg'
+                      : 'bg-surface-sunken text-text-subtle',
+                  )}
+                >
+                  {pastCount}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTripScope('ALL');
+                  setPage(1);
+                }}
+                className={tabButtonClass(tripScope === 'ALL')}
+              >
+                <span>All</span>
+                <span
+                  className={cn(
+                    'rounded-full px-1.5 py-0 text-2xs tabular-nums',
+                    tripScope === 'ALL'
+                      ? 'bg-primary-fg/15 text-primary-fg'
+                      : 'bg-surface-sunken text-text-subtle',
+                  )}
+                >
+                  {allRows.length}
+                </span>
+              </button>
+            </div>
+          )}
           {waitingTab && (onManager > 0 || review) && (
             <button
               type="button"
@@ -1299,12 +1631,18 @@ export default function ApprovalsPage() {
                     {/* At least 10rem, so on a phone the buttons wrap under it
                         rather than squeezing the request into a sliver. */}
                     <div className="min-w-0 flex-1 basis-40">
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
                         <ItemNumber value={request.id} />
                         <RequestTripHighlight request={request} />
                         <Badge tone={STATUS_TONE[request.status]}>
                           {REQUEST_STATUS_LABELS[request.status]}
                         </Badge>
+                        <RequestTelemetryBadge
+                          requestId={request.id}
+                          requestType={request.request_type}
+                          mode={request.mode}
+                          requestStatus={request.status}
+                        />
                         <PriorityBadge priority={request.priority} />
                         {request.extends_request_id != null && (
                           <Badge tone="brand">
@@ -1316,6 +1654,12 @@ export default function ApprovalsPage() {
                           <Badge tone="info">
                             <CalendarPlus size={11} />
                             Extended by {request.extended_by_request_id}
+                          </Badge>
+                        )}
+                        {request.assigned_vendor_name && (
+                          <Badge tone="info">
+                            <UserCheck size={11} />
+                            Vendor: {request.assigned_vendor_name}
                           </Badge>
                         )}
                         {request.edit_count > 0 && (
@@ -1380,6 +1724,7 @@ export default function ApprovalsPage() {
                         title="The car sent, its number and driver"
                         onClick={() => {
                           setCabDraft(cabDraftFrom(request));
+                          setCabNotify(true);
                           setCabEditing(request);
                         }}
                       >
@@ -1461,13 +1806,29 @@ export default function ApprovalsPage() {
                           </div>
                         )}
 
-                        <div className="ml-auto flex gap-1.5">
+                        <div className="ml-auto flex items-center gap-1.5">
                           {traveller.status === 'PENDING' && (
                             <>
+                              {traveller.manager_id && traveller.manager_recommendation !== 'RECOMMENDED' && (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-2xs font-medium text-amber-800 dark:text-amber-300"
+                                  title="Admin approval is locked until direct manager L1 approval is recorded"
+                                >
+                                  {traveller.manager_recommendation === 'NOT_RECOMMENDED'
+                                    ? 'L1 Rejected'
+                                    : 'Awaiting L1 Review'}
+                                </span>
+                              )}
                               <Button
                                 size="sm"
+                                disabled={Boolean(traveller.manager_id && traveller.manager_recommendation !== 'RECOMMENDED')}
                                 loading={decide.isPending && decide.variables?.traveller.id === traveller.id}
                                 onClick={() => start(request, traveller, 'APPROVED')}
+                                title={
+                                  traveller.manager_id && traveller.manager_recommendation !== 'RECOMMENDED'
+                                    ? 'Manager approval (L1) is strictly required before Admin can approve'
+                                    : 'Approve traveller'
+                                }
                               >
                                 Approve
                               </Button>
@@ -1522,6 +1883,34 @@ export default function ApprovalsPage() {
                         </div>
                       )}
                     </div>
+                  )}
+
+                  {isOpen && request.request_type === 'HOTEL' && (
+                    <>
+                      <HotelProposalsCard
+                        requestId={request.id}
+                        requestStatus={request.status}
+                        requesterId={request.requester_id}
+                        onUpdated={refresh}
+                      />
+                      <HotelStayVerificationCard
+                        requestId={request.id}
+                        requestStatus={request.status}
+                        hotelCity={request.hotel_city}
+                        readOnly={!request.travellers.some((t) => t.user_id === me?.id)}
+                        onUpdated={refresh}
+                      />
+                    </>
+                  )}
+
+                  {isOpen && (request.request_type === 'LOCAL_CAB' || request.mode === 'CAB') && (
+                    <CabTelemetryCard
+                      requestId={request.id}
+                      requestStatus={request.status}
+                      cabTrip={request.cab_trip}
+                      readOnly={!request.travellers.some((t) => t.user_id === me?.id)}
+                      onUpdated={refresh}
+                    />
                   )}
 
                   {isOpen && (
@@ -1662,7 +2051,7 @@ export default function ApprovalsPage() {
                   request: cabEditing,
                   carChanged: cabCarChanged,
                   body: {
-                    ...cabBody(cabDraft, true),
+                    ...cabBody(cabDraft, cabNotify),
                     ...(cabVendorChanged ? { vendor_id: cabVendor } : {}),
                   },
                 });
@@ -1695,6 +2084,22 @@ export default function ApprovalsPage() {
                 emptyLabel="Not recorded — choose a vendor"
               />
             </Field>
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-md bg-surface-sunken px-3 py-2.5">
+              <input
+                type="checkbox"
+                checked={cabNotify}
+                onChange={(e) => setCabNotify(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5 accent-[rgb(var(--primary))]"
+              />
+              <span className="text-xs">
+                <span className="font-medium">Email riders with cab &amp; driver details</span>
+                <span className="block text-text-muted">
+                  {cabNotify
+                    ? 'Travellers and their managers receive an email with vehicle number & driver phone.'
+                    : 'No email. The cab details are still saved in the portal and activity log.'}
+                </span>
+              </span>
+            </label>
           </div>
         )}
       </Modal>

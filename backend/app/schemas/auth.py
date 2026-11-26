@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.core.enums import Designation, Gender, Role, UserStatus
+from app.core.enums import Designation, Gender, HotelOccupancy, Role, UserStatus
 from app.schemas.common import UTCInstant
 from app.schemas.user import MobileNumber, PersonName, WorkEmail
 
@@ -33,6 +33,14 @@ class UserProfile(BaseModel):
     #: Who they report to, for ground staff in a team.
     manager_id: int | None = None
     manager_name: str | None = None
+    vendor_id: int | None = None
+    vendor_name: str | None = None
+    hotel_occupancy_entitlement: HotelOccupancy = HotelOccupancy.SINGLE
+    upi_id: str | None = None
+    bank_name: str | None = None
+    bank_account_number: str | None = None
+    account_holder_name: str | None = None
+    ifsc_code: str | None = None
     theme_preference: str
     status: UserStatus
     is_active: bool
@@ -82,6 +90,11 @@ class ProfileUpdateRequest(BaseModel):
 
     full_name: PersonName | None = Field(default=None, min_length=2, max_length=160)
     phone: MobileNumber = Field(default=None, max_length=32)
+    upi_id: str | None = None
+    bank_name: str | None = None
+    bank_account_number: str | None = None
+    account_holder_name: str | None = None
+    ifsc_code: str | None = None
 
 
 class EmailChangeRequest(BaseModel):

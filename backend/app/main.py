@@ -23,15 +23,21 @@ from app.database import SessionLocal, engine
 from app.routers import analytics as analytics_router
 from app.routers import audit as audit_router
 from app.routers import auth as auth_router
+from app.routers import bug_reports as bug_reports_router
 from app.routers import departments as departments_router
+from app.routers import expenses as expenses_router
+from app.routers import hotels as hotels_router
+from app.routers import hotel_proposals as hotel_proposals_router
 from app.routers import id_proofs as id_proofs_router
 from app.routers import insights as insights_router
 from app.routers import internal as internal_router
 from app.routers import invoices as invoices_router
 from app.routers import locations as locations_router
 from app.routers import notifications as notifications_router
+from app.routers import policies as policies_router
 from app.routers import projects as projects_router
 from app.routers import requests as requests_router
+from app.routers import telemetry as telemetry_router
 from app.routers import tickets as tickets_router
 from app.routers import team as team_router
 from app.routers import users as users_router
@@ -210,6 +216,10 @@ app.include_router(team_router.router)
 app.include_router(departments_router.router)
 app.include_router(projects_router.router)
 app.include_router(requests_router.router)
+app.include_router(hotels_router.router)
+app.include_router(hotel_proposals_router.router)
+app.include_router(telemetry_router.router)
+app.include_router(expenses_router.router)
 app.include_router(tickets_router.router)
 app.include_router(notifications_router.router)
 app.include_router(analytics_router.router)
@@ -219,6 +229,8 @@ app.include_router(audit_router.router)
 app.include_router(vendors_router.router)
 app.include_router(invoices_router.router)
 app.include_router(locations_router.router)
+app.include_router(policies_router.router)
+app.include_router(bug_reports_router.router)
 app.include_router(internal_router.router)
 
 

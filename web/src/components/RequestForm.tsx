@@ -3,6 +3,7 @@ import { AlertTriangle, BedDouble, Car, Plane, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { DateTimePicker } from '@/components/DateTimePicker';
 import { PlacePicker } from '@/components/PlacePicker';
 import {
   NO_ROOM_PICK,
@@ -58,6 +59,8 @@ interface FormState {
   /** A cab's city or constituency, beside the street address. */
   pickup_city: string;
   drop_city: string;
+  /** When true, cab stays with employee all day and drops back at pickup location (e.g. hotel) */
+  drop_same_location: boolean;
   /** Most cab rides start and end in one city, so the drop's state and city
    *  follow the pickup's unless this is turned off. */
   drop_same_city: boolean;
@@ -89,6 +92,7 @@ const BLANK: FormState = {
   destination: '',
   pickup_city: '',
   drop_city: '',
+  drop_same_location: true,
   drop_same_city: true,
   cab_type: 'NO_PREFERENCE',
   cab_trip: 'LOCAL',
@@ -102,6 +106,12 @@ const BLANK: FormState = {
 };
 
 function fromRequest(request: TravelRequest): FormState {
+  const sameLoc =
+    request.request_type === 'LOCAL_CAB'
+      ? !request.destination ||
+        (request.destination.trim().toLowerCase() === (request.origin || '').trim().toLowerCase()) ||
+        request.destination.toLowerCase().includes('same as pickup')
+      : false;
   return {
     request_type: request.request_type,
     project_id: String(request.project_id),
@@ -119,6 +129,7 @@ function fromRequest(request: TravelRequest): FormState {
     destination: request.destination ?? '',
     pickup_city: request.pickup_city ?? '',
     drop_city: request.drop_city ?? '',
+    drop_same_location: sameLoc,
     drop_same_city:
       !request.drop_city ||
       (request.drop_city === request.pickup_city &&
@@ -161,14 +172,20 @@ function toPayload(form: FormState, isDraft: boolean): RequestPayload {
     };
   }
   if (form.request_type === 'LOCAL_CAB') {
-    const drop = dropPlace(form);
+    const isSameLoc = form.drop_same_location;
+    const drop = isSameLoc
+      ? { state: form.origin_state, city: form.pickup_city }
+      : dropPlace(form);
+    const dropAddress = isSameLoc
+      ? (form.origin || 'Same as pickup location')
+      : form.destination;
     return {
       ...base,
       mode: 'CAB',
       origin: form.origin || null,
       origin_state: form.origin_state || null,
       pickup_city: form.pickup_city || null,
-      destination: form.destination || null,
+      destination: dropAddress || null,
       destination_state: drop.state || null,
       drop_city: drop.city || null,
       start_at: form.start_at || null,
@@ -218,9 +235,13 @@ const isFallbackCampaign = (project: { code: string; is_fallback?: boolean }) =>
 function worthChecking(form: FormState): boolean {
   if (!form.project_id) return false;
   if (form.request_type === 'HOTEL') return Boolean(form.hotel_city && form.check_in);
-  const route = Boolean(form.origin && form.destination && form.start_at);
+  const isSameLoc = form.request_type === 'LOCAL_CAB' && form.drop_same_location;
+  const destination = isSameLoc ? form.origin : form.destination;
+  const route = Boolean(form.origin && destination && form.start_at);
   if (form.request_type !== 'LOCAL_CAB') return route;
-  const drop = dropPlace(form);
+  const drop = isSameLoc
+    ? { state: form.origin_state, city: form.pickup_city }
+    : dropPlace(form);
   // An outstation cab without its distance would be refused by the check, and
   // a refused check would hide any clash warning while the distance is typed.
   const distance =
@@ -648,49 +669,79 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
                     placeholder="Road No. 12, Banjara Hills"
                   />
                 </Field>
-                <label className="flex cursor-pointer items-center gap-2.5 text-sm sm:col-span-2">
-                  <input
-                    type="checkbox"
-                    checked={form.drop_same_city}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        drop_same_city: e.target.checked,
-                        // Start the separate drop from the pickup's place, which
-                        // is usually one field away from right.
-                        ...(!e.target.checked && !form.drop_city
-                          ? { destination_state: form.origin_state, drop_city: '' }
-                          : {}),
-                      })
-                    }
-                    className="h-4 w-4 accent-[rgb(var(--primary))]"
-                  />
-                  Drop is in the same city
-                </label>
-                {!form.drop_same_city && (
-                  <PlacePicker
-                    key="drop"
-                    label="Drop"
-                    id="drop"
-                    required
-                    className="sm:col-span-2"
-                    state={form.destination_state}
-                    city={form.drop_city}
-                    onChange={({ state, city }) =>
-                      setForm({ ...form, destination_state: state, drop_city: city })
-                    }
-                  />
+                <div className="sm:col-span-2 rounded-lg border border-border bg-surface-sunken p-3">
+                  <label className="flex cursor-pointer items-start gap-2.5">
+                    <input
+                      type="checkbox"
+                      checked={form.drop_same_location}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          drop_same_location: e.target.checked,
+                          destination: e.target.checked ? form.origin : form.destination,
+                          destination_state: e.target.checked ? form.origin_state : form.destination_state,
+                          drop_city: e.target.checked ? form.pickup_city : form.drop_city,
+                        })
+                      }
+                      className="mt-0.5 h-4 w-4 accent-[rgb(var(--primary))]"
+                    />
+                    <div className="text-xs">
+                      <span className="font-semibold text-text block">Drop is at the same location (returns to hotel / pickup)</span>
+                      <span className="text-text-muted block mt-0.5">
+                        Cab stays with the employee on-ground for the day and drops back at the pickup hotel/location.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+
+                {!form.drop_same_location && (
+                  <>
+                    <label className="flex cursor-pointer items-center gap-2.5 text-xs font-medium text-text sm:col-span-2">
+                      <input
+                        type="checkbox"
+                        checked={form.drop_same_city}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            drop_same_city: e.target.checked,
+                            // Start the separate drop from the pickup's place
+                            ...(!e.target.checked && !form.drop_city
+                              ? { destination_state: form.origin_state, drop_city: '' }
+                              : {}),
+                          })
+                        }
+                        className="h-4 w-4 accent-[rgb(var(--primary))]"
+                      />
+                      Drop is in the same city
+                    </label>
+
+                    {!form.drop_same_city && (
+                      <PlacePicker
+                        key="drop"
+                        label="Drop"
+                        id="drop"
+                        required
+                        className="sm:col-span-2"
+                        state={form.destination_state}
+                        city={form.drop_city}
+                        onChange={({ state, city }) =>
+                          setForm({ ...form, destination_state: state, drop_city: city })
+                        }
+                      />
+                    )}
+
+                    <Field label="Different drop address" htmlFor="destination" required className="sm:col-span-2" hint="E.g. Airport, Client Office, or Railway Station">
+                      <Input
+                        id="destination"
+                        required
+                        maxLength={160}
+                        value={form.destination}
+                        onChange={(e) => setForm({ ...form, destination: e.target.value })}
+                        placeholder="RGIA Airport, Terminal 1"
+                      />
+                    </Field>
+                  </>
                 )}
-                <Field label="Drop address" htmlFor="destination" required className="sm:col-span-2">
-                  <Input
-                    id="destination"
-                    required
-                    maxLength={160}
-                    value={form.destination}
-                    onChange={(e) => setForm({ ...form, destination: e.target.value })}
-                    placeholder="RGIA Airport, Terminal 1"
-                  />
-                </Field>
 
                 <Field
                   label="Cab type"
@@ -805,29 +856,28 @@ export default function RequestForm({ open, onClose, editing, onSaved }: Request
                 />
               </>
             )}
-            <Field label={isCab ? 'Pickup time' : 'Departs'} htmlFor="start_at" required>
-              <Input
+            <Field label={isCab ? 'Pickup date & time' : 'Departs (date & time)'} htmlFor="start_at" required>
+              <DateTimePicker
                 id="start_at"
-                type="datetime-local"
                 required
                 value={form.start_at}
-                onChange={(e) => setForm({ ...form, start_at: e.target.value })}
+                onChange={(val) => setForm({ ...form, start_at: val })}
               />
             </Field>
             <Field
-              label={isCab ? 'Cab needed until' : 'Arrives'}
+              label={isCab ? 'Cab needed until (date & time)' : 'Arrives (date & time)'}
               htmlFor="end_at"
               hint={
                 isCab
                   ? 'Optional. If the work runs over after it is booked, you can ask for one more day.'
-                  : 'Optional.'
+                  : 'Optional estimated arrival date & time.'
               }
             >
-              <Input
+              <DateTimePicker
                 id="end_at"
-                type="datetime-local"
+                minDate={form.start_at ? form.start_at.slice(0, 10) : undefined}
                 value={form.end_at}
-                onChange={(e) => setForm({ ...form, end_at: e.target.value })}
+                onChange={(val) => setForm({ ...form, end_at: val })}
               />
             </Field>
           </div>

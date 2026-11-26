@@ -154,7 +154,7 @@ export default function SetPasswordPage() {
       </div>
 
       <CompanyCredit className="mx-auto w-full max-w-sm justify-center pt-6" />
-      <CreatorCredit className="mx-auto w-full max-w-sm pt-1 text-center" />
+      <CreatorCredit className="mx-auto w-full max-w-sm pt-1.5 justify-center" />
     </div>
   );
 }

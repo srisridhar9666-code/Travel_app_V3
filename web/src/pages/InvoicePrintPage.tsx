@@ -186,6 +186,7 @@ function Sheet({ invoice }: { invoice: Invoice }) {
         <thead className="border-y border-border-strong text-2xs uppercase tracking-wide text-text-muted">
           <tr>
             <th className="py-2 pr-2 font-medium">No.</th>
+            <th className="py-2 pr-2 font-medium">Txn ID</th>
             <th className="py-2 pr-2 font-medium">Date</th>
             <th className="py-2 pr-2 font-medium">Description</th>
             <th className="py-2 pr-2 font-medium">Reference</th>
@@ -196,6 +197,9 @@ function Sheet({ invoice }: { invoice: Invoice }) {
           {invoice.lines.map((line, index) => (
             <tr key={line.id} className="break-inside-avoid">
               <td className="py-2 pr-2 align-top tabular-nums text-text-muted">{index + 1}</td>
+              <td className="whitespace-nowrap py-2 pr-2 align-top font-mono font-semibold">
+                #{line.request_id}
+              </td>
               <td className="whitespace-nowrap py-2 pr-2 align-top">{dayLabel(line.travel_date)}</td>
               <td className="py-2 pr-2 align-top">{line.description}</td>
               <td className="py-2 pr-2 align-top">{line.booking_reference ?? '—'}</td>
@@ -207,7 +211,7 @@ function Sheet({ invoice }: { invoice: Invoice }) {
         </tbody>
         <tfoot>
           <tr className="border-t-2 border-border-strong">
-            <td colSpan={4} className="py-3 text-sm font-semibold">
+            <td colSpan={5} className="py-3 text-sm font-semibold">
               Total ({invoice.line_count} {invoice.line_count === 1 ? 'trip' : 'trips'})
             </td>
             <td className="whitespace-nowrap py-3 text-right text-sm font-semibold tabular-nums">

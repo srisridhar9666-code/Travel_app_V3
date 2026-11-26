@@ -21,28 +21,34 @@ from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
-from sqlalchemy import or_, select
+from sqlalchemy import false, or_, select
 from sqlalchemy.orm import Session
 
 from app.core import clock
-from app.core.deps import AdminOrManager, AdminUser, CurrentUser, DbSession, ManagerUser
+from app.core.deps import AdminOrManager, AdminUser, CurrentUser, DbSession, ManagerUser, OpsDeskUser
 from app.core.enums import (
     ACTIVE_TRAVELLER_STATUSES,
     AuditAction,
     CabExtensionStatus,
     CancellationStatus,
+    HotelOccupancy,
     PRIORITY_RANK,
     RequestPriority,
     RequestStatus,
     RequestType,
     RoomSharingChoice,
+    StayVerificationStatus,
+    TelemetryStatus,
     TravellerStatus,
 )
 from app.models.base import naive_utcnow
 from app.models.project import Project
 from app.models.request import RequestTraveller, TravelRequest
+from app.models.telemetry import CabTelemetry, HotelStayVerification
 from app.models.user import User
+from app.services.telemetry_guard import check_booking_telemetry_lock
 from app.schemas.request import (
+    AssignVendorPayload,
     BatchDecisionPayload,
     BookingPayload,
     CabBookingPayload,
@@ -116,7 +122,15 @@ def _load(db: Session, request_id: int, user: User) -> TravelRequest:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
 
     on_it = row.requester_id == user.id or any(t.user_id == user.id for t in row.travellers)
-    if not on_it and not user.is_admin and not _leads_someone_on(row, user):
+    is_assigned_vendor = (
+        user.is_vendor
+        and user.vendor_id is not None
+        and (
+            row.assigned_vendor_id == user.vendor_id
+            or any(t.vendor_id == user.vendor_id for t in row.travellers)
+        )
+    )
+    if not on_it and not user.is_admin and not _leads_someone_on(row, user) and not is_assigned_vendor:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
     return row
 
@@ -191,8 +205,9 @@ def room_matches(
     check_in: Annotated[date | None, Query()] = None,
     check_out: Annotated[date | None, Query()] = None,
     request_id: Annotated[int | None, Query()] = None,
+    hotel_name: Annotated[str | None, Query()] = None,
 ) -> list[CoStayMatchRead]:
-    """Colleagues of the caller's gender staying in this city, for the hotel form.
+    """Colleagues of the caller's gender staying in this city/hotel, for the hotel form.
 
     Answers as soon as a city is picked: with dates, those whose stay overlaps
     (most nights in common first); without, everyone with a stay there still to
@@ -208,6 +223,7 @@ def room_matches(
         check_out=check_out,
         exclude_request_id=request_id,
         upcoming_from=None if check_in else clock.local_today(),
+        hotel_name=hotel_name,
     )
     return [CoStayMatchRead(**vars(m)) for m in matches]
 
@@ -293,7 +309,20 @@ def _matching(
     """
     filters = [TravelRequest.tenant_id == user.tenant_id]
 
-    if mine or not (user.is_admin or user.is_manager):
+    if user.is_vendor:
+        if user.vendor_id is not None:
+            traveller_vendor = select(RequestTraveller.request_id).where(
+                RequestTraveller.vendor_id == user.vendor_id
+            )
+            filters.append(
+                or_(
+                    TravelRequest.assigned_vendor_id == user.vendor_id,
+                    TravelRequest.id.in_(traveller_vendor),
+                )
+            )
+        else:
+            filters.append(false())
+    elif mine or not (user.is_admin or user.is_manager):
         on_request = select(RequestTraveller.request_id).where(RequestTraveller.user_id == user.id)
         filters.append(
             or_(TravelRequest.requester_id == user.id, TravelRequest.id.in_(on_request))
@@ -386,10 +415,19 @@ def _matching(
     elif review == "reviewed":
         rows = [r for r in rows if recommendations.reviewed_by(r, user)]
 
-    # The rows are already in memory, so "high first" is a stable re-sort of a
-    # newest-first list rather than a second query.
+    def _latest_change(r: TravelRequest) -> tuple:
+        reviewed_dates = [t.manager_reviewed_at for t in r.travellers if t.manager_reviewed_at]
+        latest_rev = max(reviewed_dates) if reviewed_dates else None
+        dt = latest_rev or r.updated_at or r.created_at or datetime.min
+        return (dt, r.id)
+
+    # Newest requests first: when sorted by priority, newest requests come first within each priority.
     if sort == "priority":
-        rows = sorted(rows, key=lambda r: PRIORITY_RANK.get(r.priority, 1))
+        rows = sorted(rows, key=lambda r: (PRIORITY_RANK.get(r.priority, 1), -r.id))
+    elif review == "reviewed":
+        rows = sorted(rows, key=_latest_change, reverse=True)
+    else:
+        rows = sorted(rows, key=_latest_change, reverse=True)
     return list(rows)
 
 
@@ -502,6 +540,10 @@ def create_request(
         db, requester=user, traveller_ids=payload.traveller_ids, tenant_id=user.tenant_id
     )
 
+    # Active booking guard: Require completion/checkout according to admin policy & regularization limits
+    if not payload.is_draft:
+        check_booking_telemetry_lock(db, user, payload.request_type)
+
     row = TravelRequest(
         tenant_id=user.tenant_id,
         requester_id=user.id,
@@ -511,6 +553,10 @@ def create_request(
     )
     svc.canonicalise_places(db, user.tenant_id, payload)
     svc.apply_body(row, payload)
+    if row.request_type is RequestType.HOTEL and payload.hotel_occupancy is HotelOccupancy.SINGLE:
+        # Pre-fill from team member's profile occupancy entitlement evaluated by Manager (SOW Section 1.1 item 2)
+        if getattr(user, "hotel_occupancy_entitlement", None):
+            row.hotel_occupancy = user.hotel_occupancy_entitlement
     row.travellers = [
         RequestTraveller(user_id=p.id, status=TravellerStatus.PENDING) for p in people
     ]
@@ -547,7 +593,7 @@ def create_request(
 
 @router.get("/queue/counts", response_model=QueueCounts)
 def queue_counts(
-    actor: AdminOrManager,
+    actor: OpsDeskUser,
     db: DbSession,
     request_type: Annotated[RequestType | None, Query(alias="type")] = None,
     search: Annotated[str | None, Query(max_length=120)] = None,
@@ -616,6 +662,7 @@ def queue_counts(
         awaiting=tally[RequestStatus.SUBMITTED],
         partially_approved=tally[RequestStatus.PARTIALLY_APPROVED],
         approved=tally[RequestStatus.APPROVED],
+        ready_for_vendor=tally[RequestStatus.READY_FOR_VENDOR],
         booked=tally[RequestStatus.BOOKED],
         rejected=tally[RequestStatus.REJECTED],
         cancelled=tally[RequestStatus.CANCELLED],
@@ -749,11 +796,19 @@ def edit_request(
         db, requester=user, traveller_ids=payload.traveller_ids, tenant_id=user.tenant_id
     )
 
+    # Active booking guard: Require completion/checkout according to admin policy & regularization limits
+    if not payload.is_draft:
+        check_booking_telemetry_lock(db, user, payload.request_type)
+
     was_draft = row.is_draft
     was_on = {t.user_id for t in row.travellers}
     before = svc.snapshot(row)
     svc.canonicalise_places(db, user.tenant_id, payload)
     svc.apply_body(row, payload)
+    if row.request_type is RequestType.HOTEL and payload.hotel_occupancy is HotelOccupancy.SINGLE:
+        # Pre-fill from team member's profile occupancy entitlement evaluated by Manager (SOW Section 1.1 item 2)
+        if getattr(user, "hotel_occupancy_entitlement", None):
+            row.hotel_occupancy = user.hotel_occupancy_entitlement
     svc.sync_travellers(db, request=row, people=people)
     after = svc.snapshot(row)
 
@@ -1231,6 +1286,13 @@ def decide_traveller(
     _decidable(row)
     traveller = _traveller_or_404(row, traveller_id)
 
+    if getattr(payload, "hotel_occupancy", None) is not None and row.request_type == RequestType.HOTEL:
+        row.hotel_occupancy = payload.hotel_occupancy
+    if getattr(payload, "cab_type", None) is not None and row.request_type == RequestType.LOCAL_CAB:
+        row.cab_type = payload.cab_type
+    if "assigned_vendor_id" in getattr(payload, "model_fields_set", set()):
+        row.assigned_vendor_id = payload.assigned_vendor_id
+
     decisions.apply(
         db,
         tenant_id=actor.tenant_id,
@@ -1247,7 +1309,8 @@ def decide_traveller(
             ticket_id=payload.ticket_id,
         ),
         http_request=http_request,
-        notify=payload.notify_employee,
+        notify=True,
+        send_email=payload.notify_employee,
     )
     db.commit()
     db.refresh(row)
@@ -1271,6 +1334,13 @@ def decide_batch(
     """
     row = _load(db, request_id, actor)
     _decidable(row)
+
+    if getattr(payload, "hotel_occupancy", None) is not None and row.request_type == RequestType.HOTEL:
+        row.hotel_occupancy = payload.hotel_occupancy
+    if getattr(payload, "cab_type", None) is not None and row.request_type == RequestType.LOCAL_CAB:
+        row.cab_type = payload.cab_type
+    if "assigned_vendor_id" in getattr(payload, "model_fields_set", set()):
+        row.assigned_vendor_id = payload.assigned_vendor_id
 
     seen: set[int] = set()
     for item in payload.decisions:
@@ -1298,7 +1368,8 @@ def decide_batch(
                 ticket_id=item.ticket_id,
             ),
             http_request=http_request,
-            notify=item.notify_employee,
+            notify=True,
+            send_email=item.notify_employee,
         )
 
     db.commit()
@@ -1310,7 +1381,7 @@ def decide_batch(
 def book_travellers(
     request_id: int,
     payload: BookingPayload,
-    actor: AdminUser,
+    actor: CurrentUser,
     http_request: Request,
     db: DbSession,
     background: BackgroundTasks,
@@ -1320,6 +1391,25 @@ def book_travellers(
     them all, their managers copied, every file attached. All or nothing."""
     row = _load(db, request_id, actor)
     _decidable(row)
+
+    if not actor.is_admin:
+        is_assigned_vendor = (
+            actor.is_vendor
+            and actor.vendor_id is not None
+            and (
+                row.assigned_vendor_id == actor.vendor_id
+                or any(t.vendor_id == actor.vendor_id for t in row.travellers)
+            )
+        )
+        if not is_assigned_vendor:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only travel desk admins or the assigned vendor can fulfill bookings.",
+            )
+        if payload.vendor_id is None:
+            payload.vendor_id = actor.vendor_id
+            payload.__pydantic_fields_set__.add("vendor_id")
+
     queued = booking.book(db, request=row, admin=actor, payload=payload, http_request=http_request)
     db.commit()
     background.add_task(notifications.deliver_queued, queued)
@@ -1336,7 +1426,7 @@ def book_travellers(
 def recommend(
     request_id: int,
     payload: RecommendationPayload,
-    manager: ManagerUser,
+    manager: AdminOrManager,
     http_request: Request,
     db: DbSession,
     background: BackgroundTasks,
@@ -1356,12 +1446,50 @@ def recommend(
         recommendation=payload.recommendation,
         comment=payload.comment,
         traveller_ids=payload.traveller_ids,
+        hotel_occupancy=payload.hotel_occupancy,
+        cab_type=payload.cab_type,
         http_request=http_request,
     )
     db.commit()
     background.add_task(notifications.deliver_queued, queued)
     db.refresh(row)
     return _read_and_release(db, row, manager)
+
+
+@router.post("/{request_id}/assign-vendor", response_model=RequestRead)
+def assign_vendor(
+    request_id: int,
+    payload: AssignVendorPayload,
+    actor: AdminUser,
+    http_request: Request,
+    db: DbSession,
+) -> RequestRead:
+    """Assign or reassign a contracted vendor for request fulfillment (SOW Section 6)."""
+    row = _load(db, request_id, actor)
+    _decidable(row)
+    if payload.vendor_id is not None:
+        from app.models.vendor import Vendor
+        vendor = db.get(Vendor, payload.vendor_id)
+        if vendor is None or vendor.tenant_id != actor.tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor not found.")
+        row.assigned_vendor_id = payload.vendor_id
+    else:
+        row.assigned_vendor_id = None
+    audit.record(
+        db,
+        action=AuditAction.UPDATE,
+        entity_type="travel_request",
+        entity_id=row.id,
+        summary=f"{actor.full_name} assigned vendor ({payload.vendor_id}) to request {row.id}",
+        changes={"assigned_vendor_id": {"to": payload.vendor_id}},
+        reason="Vendor dispatch assignment",
+        tenant_id=actor.tenant_id,
+        actor=actor,
+        request=http_request,
+    )
+    db.commit()
+    db.refresh(row)
+    return svc.to_read(db, row, tenant_id=actor.tenant_id, viewer=actor, with_conflicts=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1373,7 +1501,7 @@ def recommend(
 def record_cab(
     request_id: int,
     payload: CabBookingPayload,
-    actor: AdminUser,
+    actor: CurrentUser,
     http_request: Request,
     db: DbSession,
     background: BackgroundTasks,
@@ -1386,6 +1514,22 @@ def record_cab(
     booking a traveller is still a decision with a booking reference.
     """
     row = _load(db, request_id, actor)
+    can_dispatch = (
+        actor.is_admin
+        or (
+            actor.is_vendor
+            and actor.vendor_id is not None
+            and (
+                row.assigned_vendor_id == actor.vendor_id
+                or any(t.vendor_id == actor.vendor_id for t in row.travellers)
+            )
+        )
+    )
+    if not can_dispatch:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operations administrators or the assigned vendor can record cab details.",
+        )
     queued = cabs.record_booking(
         db, request=row, admin=actor, payload=payload, http_request=http_request
     )

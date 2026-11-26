@@ -4,7 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { formatMoney } from '@/components/charts';
 import { PaymentBadge } from '@/components/InvoicePayment';
-import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, ZEBRA_ROWS } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, tabButtonClass, ZEBRA_ROWS } from '@/components/ui';
 import { errorMessage, fetchInvoices } from '@/lib/api';
 import { periodText } from '@/lib/invoices';
 import { cn } from '@/lib/utils';
@@ -13,6 +13,7 @@ import {
   INVOICE_STATUS_LABELS,
   INVOICE_STATUS_TONES,
   isInvoiceEditor,
+  isSuperAdmin,
   type InvoiceList,
 } from '@/types';
 
@@ -57,11 +58,12 @@ function tabCount(tab: Tab, list: InvoiceList | undefined): number | undefined {
 export default function InvoicesPage() {
   const navigate = useNavigate();
   const role = useAuth((s) => s.user?.role);
-  const canEdit = isInvoiceEditor(role);
+  const isVendor = role === 'VENDOR';
+  const canEdit = isInvoiceEditor(role) || isVendor;
   const [params, setParams] = useSearchParams();
   // "APPROVED" is what older links say; it means the ones still to pay.
   const asked = params.get('status') === 'APPROVED' ? 'UNPAID' : (params.get('status') as Tab | null);
-  const fallback: Tab = role === 'SUPER_ADMIN' ? 'SUBMITTED' : 'ALL';
+  const fallback: Tab = isSuperAdmin(role) ? 'SUBMITTED' : 'ALL';
   const tab: Tab = asked && asked in TAB_LABELS ? asked : fallback;
   const setTab = (next: Tab) =>
     setParams(next === fallback ? {} : { status: next }, { replace: true });
@@ -78,15 +80,17 @@ export default function InvoicesPage() {
       <PageHeader
         title="Invoices"
         description={
-          canEdit
-            ? 'Match a vendor’s bill against the trips you booked with them. The total comes from the recorded costs, and a super admin approves it.'
-            : 'Vendor invoices the admins prepared. You approve or reject the ones waiting for you.'
+          isVendor
+            ? 'Raise invoices for your completed and booked trips, and track admin/finance verification and super admin settlement.'
+            : canEdit
+              ? 'Match a vendor’s bill against the trips you booked with them. The total comes from the recorded costs, and a super admin approves it.'
+              : 'Vendor invoices the admins prepared. You approve or reject the ones waiting for you.'
         }
         actions={
           canEdit && (
             <Button onClick={() => navigate('/invoices/new')}>
               <Plus size={15} />
-              New invoice
+              {isVendor ? 'Raise invoice' : 'New invoice'}
             </Button>
           )
         }
@@ -102,12 +106,7 @@ export default function InvoicesPage() {
               role="tab"
               aria-selected={tab === key}
               onClick={() => setTab(key)}
-              className={cn(
-                '-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors',
-                tab === key
-                  ? 'border-primary font-medium text-text'
-                  : 'border-transparent text-text-muted hover:text-text',
-              )}
+              className={tabButtonClass(tab === key, 'underline')}
             >
               {TAB_LABELS[key]}
               {count !== undefined && (

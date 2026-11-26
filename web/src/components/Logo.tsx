@@ -117,16 +117,18 @@ export function CompanyCredit({
   short?: boolean;
 }) {
   return (
-    <div className={cn('flex items-center gap-2 text-2xs text-text-subtle', className)}>
+    <div className={cn('flex items-center gap-2.5 text-xs text-text-subtle', className)}>
       <img
         src="/brand/company-mark.png"
-        alt=""
+        alt="DesignBoxed Logo"
         draggable={false}
-        className="h-6 w-6 shrink-0 select-none object-contain"
+        className="h-8 w-8 shrink-0 select-none object-contain rounded-md shadow-2xs hover:scale-105 transition-transform"
       />
-      <span>
+      <span className="leading-snug">
         A product of{' '}
-        <span className="font-medium text-text-muted">{short ? 'DesignBoxed' : COMPANY_NAME}</span>
+        <span className="font-bold text-red-600 dark:text-red-400 tracking-tight">
+          {short ? 'DesignBoxed' : COMPANY_NAME}
+        </span>
       </span>
     </div>
   );
@@ -137,8 +139,11 @@ const CREATED_BY = 'Sridhar';
 
 export function CreatorCredit({ className }: { className?: string }) {
   return (
-    <p className={cn('text-2xs text-text-subtle', className)}>
-      Created by <span className="font-medium text-text-muted">{CREATED_BY}</span>
-    </p>
+    <div className={cn('text-xs text-text-subtle flex items-center gap-1.5 flex-wrap', className)}>
+      <span>Created by</span>
+      <span className="font-bold px-2 py-0.5 rounded-md bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30 shadow-2xs font-mono text-2xs">
+        {CREATED_BY}
+      </span>
+    </div>
   );
 }

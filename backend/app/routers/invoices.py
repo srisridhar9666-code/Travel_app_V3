@@ -25,7 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, noload, selectinload
 
 from app.core import clock
-from app.core.deps import AdminUser, DbSession, InvoiceEditor, SuperAdminUser
+from app.core.deps import AdminUser, CurrentUser, DbSession, FinanceOrAdmin, InvoiceEditor, SuperAdminUser
 from app.core.enums import EDITABLE_INVOICE_STATUSES, AuditAction, InvoiceStatus, Role
 from app.models.audit import AuditLog
 from app.models.base import naive_utcnow
@@ -45,6 +45,7 @@ from app.schemas.invoice import (
     InvoiceRejection,
     InvoiceSummary,
     InvoiceUpdate,
+    InvoiceVerify,
 )
 from app.services import audit, costs, notifications
 from app.services import invoices as svc
@@ -141,6 +142,7 @@ def _history(db: Session, invoice: Invoice) -> list[InvoiceEvent]:
 def _read(db: Session, invoice: Invoice, viewer: User) -> InvoiceRead:
     found = svc.problems(db, invoice)
     editor = viewer.role in svc.EDITOR_ROLES
+    vendor_match = not viewer.is_vendor or invoice.vendor_id == viewer.vendor_id
     open_ = invoice.status in EDITABLE_INVOICE_STATUSES
     vendor = invoice.vendor
     return InvoiceRead(
@@ -153,25 +155,34 @@ def _read(db: Session, invoice: Invoice, viewer: User) -> InvoiceRead:
         updated_by_name=_name(invoice.updated_by),
         updated_at=invoice.updated_at,
         submitted_by_name=_name(invoice.submitted_by),
+        verified_by_name=_name(invoice.verified_by),
+        verified_at=invoice.verified_at,
+        verification_comment=invoice.verification_comment,
         decided_by_name=_name(invoice.decided_by),
         decision_comment=invoice.decision_comment,
         paid_by_name=_name(invoice.paid_by),
         paid_at=invoice.paid_at,
         lines=[_line_read(line, found.get(line.id)) for line in invoice.lines],
         history=_history(db, invoice),
-        can_edit=editor and open_,
+        can_edit=editor and open_ and vendor_match,
         can_submit=editor
         and invoice.status in _SUBMITTABLE
         and bool(invoice.lines)
-        and not found,
-        can_delete=editor and invoice.status in _DELETABLE,
+        and not found
+        and vendor_match,
+        can_delete=editor and invoice.status in _DELETABLE and vendor_match,
+        can_verify=(
+            viewer.role in (Role.ADMIN, Role.SYSTEM_ADMIN, Role.FINANCE)
+            and invoice.status is InvoiceStatus.SUBMITTED
+            and invoice.verified_by_id is None
+        ),
         can_decide=(
-            viewer.role is Role.SUPER_ADMIN
+            viewer.role in (Role.SUPER_ADMIN, Role.SYSTEM_ADMIN)
             and invoice.status is InvoiceStatus.SUBMITTED
             and not svc.prepared_by(db, invoice, viewer)
         ),
         can_record_payment=(
-            viewer.role is Role.SUPER_ADMIN and invoice.status is InvoiceStatus.APPROVED
+            viewer.role in (Role.SUPER_ADMIN, Role.SYSTEM_ADMIN) and invoice.status is InvoiceStatus.APPROVED
         ),
     )
 
@@ -207,7 +218,7 @@ def _vendor(db: Session, actor: User, vendor_id: int) -> Vendor:
 
 @router.get("", response_model=InvoiceList)
 def list_invoices(
-    actor: AdminUser,
+    actor: CurrentUser,
     db: DbSession,
     invoice_status: Annotated[InvoiceStatus | None, Query(alias="status")] = None,
     vendor_id: Annotated[int | None, Query()] = None,
@@ -220,6 +231,11 @@ def list_invoices(
     """Newest first. `counts` is per status for the vendor filter, whatever the
     status filter - the numbers on the tabs - and `payment_counts` splits the
     approved ones into paid and still to be paid."""
+    if not (actor.is_admin or actor.role is Role.FINANCE or actor.is_vendor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view invoices.")
+    if actor.is_vendor:
+        vendor_id = actor.vendor_id
+
     scope = [Invoice.tenant_id == actor.tenant_id]
     if vendor_id is not None:
         scope.append(Invoice.vendor_id == vendor_id)
@@ -275,7 +291,7 @@ def list_invoices(
 
 @router.get("/eligible/why")
 def why_not_listed(
-    actor: AdminUser,
+    actor: CurrentUser,
     db: DbSession,
     vendor_id: Annotated[int, Query()],
     start: Annotated[date, Query()],
@@ -283,6 +299,10 @@ def why_not_listed(
 ) -> dict[str, int]:
     """Counts of the period's trips that cannot go on this vendor's invoice,
     by reason - shown when the list of billable trips comes back empty."""
+    if not (actor.is_admin or actor.role is Role.FINANCE or actor.is_vendor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized.")
+    if actor.is_vendor:
+        vendor_id = actor.vendor_id or vendor_id
     svc.check_period(start, end)
     _vendor(db, actor, vendor_id)
     return svc.why_not_listed(
@@ -292,7 +312,7 @@ def why_not_listed(
 
 @router.get("/eligible", response_model=list[EligibleRow])
 def eligible(
-    actor: AdminUser,
+    actor: CurrentUser,
     db: DbSession,
     vendor_id: Annotated[int, Query()],
     start: Annotated[date, Query()],
@@ -306,6 +326,12 @@ def eligible(
     something has happened to them since - each with the reason it can no
     longer be billed, so the admin sees why it will come off.
     """
+    if not (actor.is_admin or actor.role is Role.FINANCE or actor.is_vendor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized.")
+    if actor.is_vendor:
+        vendor_id = actor.vendor_id or vendor_id
+        include_unassigned = False
+
     svc.check_period(start, end)
     vendor = _vendor(db, actor, vendor_id)
     invoice = _get(db, actor, invoice_id) if invoice_id is not None else None
@@ -371,8 +397,13 @@ def _eligible_row(traveller, *, on_this_invoice=False, problem=None, amount=None
 
 
 @router.get("/{invoice_id}", response_model=InvoiceRead)
-def get_invoice(invoice_id: int, actor: AdminUser, db: DbSession) -> InvoiceRead:
-    return _read(db, _get(db, actor, invoice_id), actor)
+def get_invoice(invoice_id: int, actor: CurrentUser, db: DbSession) -> InvoiceRead:
+    if not (actor.is_admin or actor.role is Role.FINANCE or actor.is_vendor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view invoices.")
+    invoice = _get(db, actor, invoice_id)
+    if actor.is_vendor and invoice.vendor_id != actor.vendor_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot access invoices for other vendors.")
+    return _read(db, invoice, actor)
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +452,14 @@ def create_invoice(
 ) -> InvoiceRead:
     """Start a draft for one vendor and period, with the trips picked. The
     number is given here and never changes; the total is the lines' sum."""
+    if actor.is_vendor:
+        if not actor.vendor_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your user account is not linked to a vendor profile.",
+            )
+        payload.vendor_id = actor.vendor_id
+
     vendor = _vendor(db, actor, payload.vendor_id)
     travellers = svc.load_travellers(db, actor.tenant_id, payload.traveller_ids)
 
@@ -502,6 +541,11 @@ def update_invoice(
     making someone reject it first just to correct a line.
     """
     invoice = _get(db, actor, invoice_id)
+    if actor.is_vendor and invoice.vendor_id != actor.vendor_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot edit invoices of other vendors.",
+        )
     if invoice.status not in EDITABLE_INVOICE_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -599,6 +643,11 @@ def submit_invoice(
     """Send a draft, or a fixed rejected one, to the super admins to approve.
     Needs at least one trip, and every trip still billable."""
     invoice = _get(db, actor, invoice_id)
+    if actor.is_vendor and invoice.vendor_id != actor.vendor_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot submit invoices of other vendors.",
+        )
     if invoice.status not in _SUBMITTABLE:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -653,6 +702,11 @@ def delete_invoice(
     """Throw away a draft or a rejected invoice. Its trips become free to bill
     on another; its number is never given out again."""
     invoice = _get(db, actor, invoice_id)
+    if actor.is_vendor and invoice.vendor_id != actor.vendor_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot delete invoices of other vendors.",
+        )
     if invoice.status not in _DELETABLE:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -687,6 +741,66 @@ def delete_invoice(
     db.delete(invoice)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Verifying: Admin and Finance officers
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{invoice_id}/verify", response_model=InvoiceRead)
+def verify_invoice(
+    invoice_id: int,
+    payload: InvoiceVerify,
+    actor: FinanceOrAdmin,
+    http_request: Request,
+    background: BackgroundTasks,
+    db: DbSession,
+) -> InvoiceRead:
+    """Audit and verify an invoice submitted by a vendor or preparer before super admin approves it."""
+    invoice = _get(db, actor, invoice_id)
+    if invoice.status is not InvoiceStatus.SUBMITTED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{invoice.number} is {invoice.status.value.lower()}, so it cannot be verified. Only a submitted invoice can be verified.",
+        )
+    invoice.verified_by_id = actor.id
+    invoice.verified_by = actor
+    invoice.verified_at = naive_utcnow()
+    invoice.verification_comment = payload.comment
+
+    audit.record(
+        db,
+        action=AuditAction.UPDATE,
+        entity_type="invoice",
+        entity_id=invoice.id,
+        summary=(
+            f"{actor.full_name} ({actor.role.value}) verified {invoice.number} for {invoice.vendor.name}: "
+            f"{len(invoice.lines)} trips, {svc.inr(invoice.total_amount)}"
+        ),
+        changes={
+            "verified_by": actor.full_name,
+            "verified_at": str(invoice.verified_at),
+        },
+        reason=payload.comment,
+        tenant_id=actor.tenant_id,
+        actor=actor,
+        request=http_request,
+    )
+    queued = svc.tell_super_admins(
+        db,
+        invoice,
+        actor,
+        kind="INVOICE_VERIFIED",
+        headline=f"Invoice {invoice.number} verified by {actor.role.value}",
+        what=(
+            f"{actor.full_name} ({actor.role.value}) audited & verified {invoice.number} from {invoice.vendor.name} "
+            f"({len(invoice.lines)} trips, {svc.inr(invoice.total_amount)}). Ready for final approval."
+        ),
+    )
+    _done(db, background, queued)
+    db.refresh(invoice)
+    return _read(db, invoice, actor)
 
 
 # ---------------------------------------------------------------------------
@@ -951,7 +1065,7 @@ def _csv(invoice: Invoice) -> str:
 
 @router.get("/{invoice_id}/export.csv")
 def export_invoice(
-    invoice_id: int, actor: AdminUser, http_request: Request, db: DbSession
+    invoice_id: int, actor: FinanceOrAdmin, http_request: Request, db: DbSession
 ) -> Response:
     """The invoice as a spreadsheet. A copy leaving the system is logged."""
     invoice = _get(db, actor, invoice_id)
@@ -981,7 +1095,7 @@ def export_invoice(
 
 @router.post("/{invoice_id}/printed", status_code=status.HTTP_204_NO_CONTENT)
 def record_print(
-    invoice_id: int, actor: AdminUser, http_request: Request, db: DbSession
+    invoice_id: int, actor: FinanceOrAdmin, http_request: Request, db: DbSession
 ) -> Response:
     """The print view says it was opened for a PDF, so that copy is in the log
     beside the CSV downloads. The page itself is drawn in the browser."""

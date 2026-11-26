@@ -12,11 +12,13 @@ from enum import StrEnum
 class Role(StrEnum):
     """What a user may do. Orthogonal to Designation."""
 
-    SUPER_ADMIN = "SUPER_ADMIN"     # everything a system admin can; approves invoices
-    SYSTEM_ADMIN = "SYSTEM_ADMIN"   # user management, settings, audit log
-    ADMIN = "ADMIN"                 # fulfilment: approve, book, upload tickets
-    MANAGER = "MANAGER"             # their own team: members (admin-approved), campaigns
-    GROUND_STAFF = "GROUND_STAFF"   # raise and edit own requests
+    SUPER_ADMIN = "SUPER_ADMIN"     # everything a system admin can; approves invoices, master policy
+    SYSTEM_ADMIN = "SYSTEM_ADMIN"   # user management, settings, audit log (legacy/co-ranked)
+    ADMIN = "ADMIN"                 # fulfilment: approve (L2), book, dispatch to vendors, upload tickets
+    FINANCE = "FINANCE"             # finance desk: expense claim audit, deductions, UTR payouts
+    MANAGER = "MANAGER"             # their own team: members, campaigns, mandatory L1 approvals, occupancy
+    VENDOR = "VENDOR"               # commercial partners: hotel proposals, cabs, ticketing
+    GROUND_STAFF = "GROUND_STAFF"   # raise and edit own requests, telemetry, reimbursements
 
 
 #: Seniority. Someone may grant, or manage the account of, only a role at or
@@ -24,17 +26,28 @@ class Role(StrEnum):
 #: governs accounts, and nobody below the top can touch the top.
 ROLE_RANK: dict[Role, int] = {
     Role.GROUND_STAFF: 0,
-    Role.MANAGER: 1,
-    Role.ADMIN: 2,
-    Role.SYSTEM_ADMIN: 3,
-    Role.SUPER_ADMIN: 4,
+    Role.VENDOR: 1,
+    Role.MANAGER: 2,
+    Role.FINANCE: 3,
+    Role.ADMIN: 4,
+    Role.SYSTEM_ADMIN: 5,
+    Role.SUPER_ADMIN: 5,
 }
 
 #: Who works the queue and sees everything, costs included.
 ADMIN_ROLES = frozenset({Role.ADMIN, Role.SYSTEM_ADMIN, Role.SUPER_ADMIN})
 
+#: Operational travel-desk admins who action requests and recommendations (excludes Super Admin).
+OPS_ADMIN_ROLES = frozenset({Role.ADMIN, Role.SYSTEM_ADMIN})
+
 #: Who manages accounts at the top tier. The last active one is protected.
 ACCOUNT_ROLES = frozenset({Role.SYSTEM_ADMIN, Role.SUPER_ADMIN})
+
+#: Who audits expense claims and settles payouts.
+FINANCE_ROLES = frozenset({Role.FINANCE, Role.SUPER_ADMIN})
+
+#: External vendor portal accounts.
+VENDOR_ROLES = frozenset({Role.VENDOR})
 
 
 class TeamChangeKind(StrEnum):
@@ -189,6 +202,7 @@ class RequestStatus(StrEnum):
     SUBMITTED = "SUBMITTED"                     # in the queue, still editable
     PARTIALLY_APPROVED = "PARTIALLY_APPROVED"   # some travellers decided
     APPROVED = "APPROVED"                       # all approved, no tickets yet
+    READY_FOR_VENDOR = "READY_FOR_VENDOR"       # approved and ready for vendor dispatch (SOW Section 6)
     BOOKED = "BOOKED"                           # tickets attached and confirmed
     REJECTED = "REJECTED"                       # every traveller rejected
     CANCELLED = "CANCELLED"
@@ -258,6 +272,89 @@ class RoomSharingChoice(StrEnum):
     SEPARATE_HOTEL = "SEPARATE_HOTEL"
 
 
+class HotelOccupancy(StrEnum):
+    """Hotel room occupancy entitlement (SOW Section 1.1, 4.2 & 7)."""
+
+    SINGLE = "SINGLE"     # default occupancy
+    DOUBLE = "DOUBLE"     # evaluated by manager / admin
+    TRIPLE = "TRIPLE"
+
+
+class CityTier(StrEnum):
+    """City categorization for lodging policy caps (SOW Section 4.2)."""
+
+    CATEGORY_A = "CATEGORY_A"  # Mumbai, Delhi, Kolkata, Chennai, Bengaluru, Hyderabad
+    CATEGORY_B = "CATEGORY_B"  # State capitals & designated Tier 2 cities
+    CATEGORY_C = "CATEGORY_C"  # All other remaining cities and rural districts
+
+
+CITY_TIER_LABELS = {
+    CityTier.CATEGORY_A: "Category A (Tier 1 Metros)",
+    CityTier.CATEGORY_B: "Category B (State Capitals & Tier 2)",
+    CityTier.CATEGORY_C: "Category C (Other Cities & Districts)",
+}
+
+
+class HotelProposalStatus(StrEnum):
+    """Lifecycle of a vendor-submitted hotel proposal."""
+
+    PROPOSED = "PROPOSED"     # vendor submitted 2 to 5 options
+    SELECTED = "SELECTED"     # employee selected this preferred stay
+    CONFIRMED = "CONFIRMED"   # booking voucher issued
+    REJECTED = "REJECTED"     # not selected or rejected by admin
+
+
+class TelemetryStatus(StrEnum):
+    """Status of daily cab hire odometer telemetry (SOW Section 8.1)."""
+
+    IN_PROGRESS = "IN_PROGRESS"   # trip started, morning photo captured
+    COMPLETED = "COMPLETED"       # trip ended, evening photo captured, KM computed
+    VERIFIED = "VERIFIED"         # verified by admin or finance against vendor invoice
+
+
+class StayVerificationStatus(StrEnum):
+    """Status of physical hotel presence check-in/out (SOW Section 8.2)."""
+
+    CHECKED_IN = "CHECKED_IN"     # arrival timestamp, GPS, room # recorded
+    CHECKED_OUT = "CHECKED_OUT"   # departure timestamp, GPS, folio bill uploaded
+    VERIFIED = "VERIFIED"         # verified by admin or finance audit
+
+
+class ExpenseCategory(StrEnum):
+    """Reimbursement expense categories under corporate policy (SOW Section 4.3 & 9.1)."""
+
+    FOOD = "FOOD"                   # daily food: flat ₹400/day for all cities with itemized bill
+    LOCAL_TRANSIT = "LOCAL_TRANSIT" # auto up to ₹150/day unbilled; taxis/tolls/parking at actuals
+    MISCELLANEOUS = "MISCELLANEOUS" # incidental field supplies with justification
+
+
+class ExpenseStatus(StrEnum):
+    """Post-travel expense claim workflow state (SOW Section 9)."""
+
+    DRAFT = "DRAFT"                               # employee compiling claim
+    SUBMITTED = "SUBMITTED"                       # submitted for manager review
+    MANAGER_ENDORSED = "MANAGER_ENDORSED"         # manager endorsed official duty context
+    FINANCE_APPROVED = "FINANCE_APPROVED"         # finance audited & fully approved
+    PARTIALLY_APPROVED = "PARTIALLY_APPROVED"     # finance approved with itemized deduction notes
+    REJECTED = "REJECTED"                         # rejected with written reason
+    SETTLED = "SETTLED"                           # payout disbursed with bank UTR #
+
+
+class PaymentMode(StrEnum):
+    """Modes of reimbursement payout disbursement by Finance (SOW Section 1.1 & 9.2)."""
+
+    NEFT = "NEFT"
+    RTGS = "RTGS"
+    UPI = "UPI"
+    CHEQUE = "CHEQUE"
+    OTHER = "OTHER"
+
+
+#: Official DesignBoxed Policy Allowance Limits (SOW Section 4.2 & 4.3)
+FOOD_ALLOWANCE_PER_DAY = 400            # flat ₹400/day across all cities
+LOCAL_TRANSIT_UNBILLED_MAX = 150        # max ₹150/day without receipt for auto/rickshaw
+
+
 class ConflictKind(StrEnum):
     OVERLAPPING_TRAVEL = "OVERLAPPING_TRAVEL"
     OVERLAPPING_STAY = "OVERLAPPING_STAY"
@@ -291,6 +388,15 @@ class AuditAction(StrEnum):
     RECOMMEND = "RECOMMEND"             # a manager's advice on a team member's trip
     VIEW_SENSITIVE = "VIEW_SENSITIVE"   # ID proof opened - PII access trail
     EXPORT = "EXPORT"                   # a document left the system, e.g. an invoice CSV
+    PROPOSE_HOTEL = "PROPOSE_HOTEL"     # vendor submitted hotel proposals
+    SELECT_HOTEL = "SELECT_HOTEL"       # requester chose preferred hotel stay
+    CHECK_IN = "CHECK_IN"               # manual hotel check-in recorded
+    CHECK_OUT = "CHECK_OUT"             # manual hotel check-out + folio bill uploaded
+    CAPTURE_ODOMETER = "CAPTURE_ODOMETER" # start or end cab odometer captured
+    SUBMIT_EXPENSE = "SUBMIT_EXPENSE"   # reimbursement claim submitted
+    ENDORSE_EXPENSE = "ENDORSE_EXPENSE" # manager endorsed reimbursement claim
+    AUDIT_EXPENSE = "AUDIT_EXPENSE"     # finance approved/deducted reimbursement claim
+    SETTLE_EXPENSE = "SETTLE_EXPENSE"   # finance recorded payout UTR reference
 
 
 class VendorKind(StrEnum):
@@ -371,6 +477,8 @@ class NotificationCategory(StrEnum):
     ROOM_SHARING = "ROOM_SHARING"  # a colleague asked to share your room
     REMINDERS = "REMINDERS"       # nudges: travel coming up, requests going stale
     NEW_REQUESTS = "NEW_REQUESTS"  # admins and managers: a request needs their answer
+    REIMBURSEMENTS = "REIMBURSEMENTS" # expense claims submitted, audited, or settled
+    HOTEL_PROPOSALS = "HOTEL_PROPOSALS" # vendor proposed hotels, employee selected stay
 
 
 #: Which category each notification kind belongs to. A kind that is missing here
@@ -412,6 +520,13 @@ NOTIFICATION_CATEGORIES: dict[str, NotificationCategory] = {
     "INVOICE_REJECTED": NotificationCategory.DECISIONS,
     # Paid, or a payment taken back: the preparers' in-app notice.
     "INVOICE_PAID": NotificationCategory.DECISIONS,
+    # V4: Hotel proposals & Reimbursements
+    "HOTEL_PROPOSALS_RECEIVED": NotificationCategory.HOTEL_PROPOSALS,
+    "HOTEL_SELECTED": NotificationCategory.HOTEL_PROPOSALS,
+    "EXPENSE_SUBMITTED": NotificationCategory.REIMBURSEMENTS,
+    "EXPENSE_ENDORSED": NotificationCategory.REIMBURSEMENTS,
+    "EXPENSE_AUDITED": NotificationCategory.REIMBURSEMENTS,
+    "EXPENSE_SETTLED": NotificationCategory.REIMBURSEMENTS,
 }
 
 

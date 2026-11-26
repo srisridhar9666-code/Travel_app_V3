@@ -26,8 +26,13 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.core.enums import (
     ADMIN_ROLES,
+    OPS_ADMIN_ROLES,
     AuditAction,
+    CabType,
+    HotelOccupancy,
     ManagerRecommendation,
+    RequestType,
+    Role,
     TravellerStatus,
 )
 from app.models.base import naive_utcnow
@@ -143,6 +148,8 @@ def record(
     recommendation: ManagerRecommendation,
     comment: str,
     traveller_ids: list[int] | None = None,
+    hotel_occupancy: HotelOccupancy | None = None,
+    cab_type: CabType | None = None,
     http_request=None,
 ) -> list[int]:
     """Save a manager's view on their team members' part of a request, log it,
@@ -153,6 +160,47 @@ def record(
     """
     chosen = _choose(request, manager, traveller_ids)
     verb = "recommended" if recommendation is ManagerRecommendation.RECOMMENDED else "did not recommend"
+    request.updated_at = naive_utcnow()
+
+    if cab_type is not None and request.request_type == RequestType.LOCAL_CAB:
+        before_cab = request.cab_type
+        if before_cab != cab_type:
+            request.cab_type = cab_type
+            audit.record(
+                db,
+                action=AuditAction.UPDATE,
+                entity_type="travel_request",
+                entity_id=request.id,
+                summary=(
+                    f"{manager.full_name} evaluated and set car category to {cab_type.value} "
+                    f"on request {request.id}"
+                ),
+                changes={"cab_type": {"from": str(before_cab), "to": str(cab_type)}},
+                reason=comment,
+                tenant_id=request.tenant_id,
+                actor=manager,
+                request=http_request,
+            )
+
+    if hotel_occupancy is not None and request.request_type == RequestType.HOTEL:
+        before_occ = request.hotel_occupancy
+        if before_occ != hotel_occupancy:
+            request.hotel_occupancy = hotel_occupancy
+            audit.record(
+                db,
+                action=AuditAction.UPDATE,
+                entity_type="travel_request",
+                entity_id=request.id,
+                summary=(
+                    f"{manager.full_name} set hotel occupancy to {hotel_occupancy.value} "
+                    f"during L1 evaluation on request {request.id}"
+                ),
+                changes={"hotel_occupancy": {"from": str(before_occ), "to": str(hotel_occupancy)}},
+                reason=comment,
+                tenant_id=request.tenant_id,
+                actor=manager,
+                request=http_request,
+            )
 
     for traveller in chosen:
         before = traveller.manager_recommendation
@@ -202,23 +250,33 @@ def _tell_admins(
     recommendation: ManagerRecommendation,
     comment: str,
 ) -> list[int]:
-    """Every active admin hears the manager's view, comment included.
+    """Operational admins hear the manager's view in one group email, comment included.
 
-    In app always; by email unless they switched "New requests" off - the same
-    switch as a new submission, because both say "a request is ready for you".
+    Super Admin never receives emails for manager recommendations (in-app only).
     """
-    admins = (
+    ops_admins = (
         db.execute(
             select(User).where(
                 User.tenant_id == request.tenant_id,
-                User.role.in_(ADMIN_ROLES),
+                User.role.in_(OPS_ADMIN_ROLES),
                 User.is_active.is_(True),
             )
         )
         .scalars()
         .all()
     )
-    if not admins:
+    super_admins = (
+        db.execute(
+            select(User).where(
+                User.tenant_id == request.tenant_id,
+                User.role == Role.SUPER_ADMIN,
+                User.is_active.is_(True),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not ops_admins and not super_admins:
         return []
 
     label = LABELS[recommendation]
@@ -226,32 +284,47 @@ def _tell_admins(
     summary = trip_summary(request)
     link = f"{get_settings().frontend_base_url.rstrip('/')}/approvals"
     title = f"{manager.full_name}: {label.lower()} for {names}"
+    body = f"{summary}. {label} - {comment}"
+
+    lines = [
+        "Hello Travel Desk,",
+        "",
+        f"{manager.full_name} gave their recommendation on a request for {names}.",
+        "",
+        summary,
+        f"Manager's recommendation: {label}",
+        f"Their comment: {comment}",
+        "",
+        "The final decision is yours.",
+        f"Decide it on Approvals: {link}",
+    ]
 
     queued: list[int] = []
-    for admin in admins:
-        lines = [
-            f"Hello {admin.full_name.split()[0] if admin.full_name else 'there'},",
-            "",
-            f"{manager.full_name} gave their recommendation on a request for {names}.",
-            "",
-            summary,
-            f"Manager's recommendation: {label}",
-            f"Their comment: {comment}",
-            "",
-            "The final decision is yours.",
-            f"Decide it on Approvals: {link}",
-        ]
-        rows = notifications.notify(
+    if ops_admins:
+        rows = notifications.notify_group(
             db,
             tenant_id=request.tenant_id,
-            user=admin,
+            people=list(ops_admins),
             kind="MANAGER_RECOMMENDED",
             title=title[:200],
-            body=f"{summary}. {label} - {comment}",
+            body=body,
             request_id=request.id,
             email_subject=f"{label} by {manager.full_name}: {summary}"[:255],
             email_body="\n".join(lines),
+            cc_users=[manager] if manager.is_active else None,
             deliver_now=False,
         )
         queued += queued_emails(rows)
+
+    for sa_user in super_admins:
+        notifications.notify(
+            db,
+            tenant_id=request.tenant_id,
+            user=sa_user,
+            kind="MANAGER_RECOMMENDED",
+            title=title[:200],
+            body=body,
+            request_id=request.id,
+            send_email=False,
+        )
     return queued

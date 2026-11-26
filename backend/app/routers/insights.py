@@ -12,7 +12,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.core.deps import AdminUser, DbSession
+from app.core.deps import AdminUser, CurrentUser, DbSession, FinanceOrAdmin
 from app.core.enums import RequestType, TravellerStatus
 from app.services import insights
 
@@ -52,7 +52,7 @@ ReportFilters = Annotated[insights.Filters, Depends(report_filters)]
 
 @router.get("/travel-logs")
 def travel_logs(
-    actor: AdminUser,
+    actor: FinanceOrAdmin,
     db: DbSession,
     filters: ReportFilters,
     status: Annotated[list[TravellerStatus] | None, Query()] = None,
@@ -75,14 +75,14 @@ def travel_logs(
 
 
 @router.get("/analytics/insights")
-def dashboard(actor: AdminUser, db: DbSession, filters: ReportFilters) -> dict:
+def dashboard(actor: FinanceOrAdmin, db: DbSession, filters: ReportFilters) -> dict:
     """The dashboard for a window and slice. No dates means all time; a
     missing side is open."""
     return insights.dashboard(db, actor.tenant_id, filters)
 
 
 @router.get("/analytics/filter-options")
-def filter_options(actor: AdminUser, db: DbSession) -> dict:
+def filter_options(actor: CurrentUser, db: DbSession) -> dict:
     """Campaigns, departments, people, destination states and cities, for the
     report filters."""
     return insights.filter_options(db, actor.tenant_id)

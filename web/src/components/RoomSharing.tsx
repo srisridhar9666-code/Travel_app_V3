@@ -75,6 +75,7 @@ export function roomPayload(
 function matchDetail(match: CoStayMatch): string {
   const parts = [
     match.designation ? DESIGNATION_LABELS[match.designation] : null,
+    match.hotel_name ? `Hotel: ${match.hotel_name}` : null,
     stayDates(match),
     match.overlapping_nights > 0
       ? `${match.overlapping_nights} ${match.overlapping_nights === 1 ? 'night' : 'nights'} in common`
@@ -157,16 +158,22 @@ export function RoomChoice({
         <fieldset className="mt-2 space-y-1.5">
           <legend className="sr-only">Your room</legend>
           {matches.map((match) => (
-            <Choice
-              key={match.user_id}
-              checked={
-                chosen.room_sharing === 'SHARE_EXISTING' &&
-                chosen.share_with_user_id === match.user_id
-              }
-              onSelect={() => onPick({ choice: 'SHARE_EXISTING', withUserId: match.user_id })}
-              title={`Share a room with ${match.full_name}`}
-              detail={matchDetail(match)}
-            />
+            <div key={match.user_id} className="relative">
+              <Choice
+                checked={
+                  chosen.room_sharing === 'SHARE_EXISTING' &&
+                  chosen.share_with_user_id === match.user_id
+                }
+                onSelect={() => onPick({ choice: 'SHARE_EXISTING', withUserId: match.user_id })}
+                title={`Share a room with ${match.full_name}`}
+                detail={matchDetail(match)}
+              />
+              {match.same_hotel && (
+                <span className="absolute top-2 right-2 inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                  Exact Same Hotel
+                </span>
+              )}
+            </div>
           ))}
           <Choice
             checked={chosen.room_sharing === 'SEPARATE_ROOM'}
@@ -295,6 +302,11 @@ export function RoomAllotment({
             <span className="min-w-0 text-xs text-text-muted">
               <span className="font-medium text-text">{match.full_name}</span> ·{' '}
               {matchDetail(match)}
+              {match.same_hotel && (
+                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                  Same Hotel
+                </span>
+              )}
             </span>
             <Button
               size="sm"

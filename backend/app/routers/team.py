@@ -40,6 +40,7 @@ from app.schemas.team import (
     TeamChangeRead,
     TeamDecision,
     TeamEditRequest,
+    TeamMemberOccupancyUpdate,
     TeamReject,
     TeamRemoveRequest,
 )
@@ -295,6 +296,40 @@ def _open(
 def members(manager: ManagerUser, db: DbSession) -> list[UserRead]:
     """Everyone who reports to the caller, deleted accounts aside."""
     return [_member_read(m) for m in _members(db, manager)]
+
+
+@router.put("/members/{user_id}/occupancy", response_model=UserRead)
+def update_member_occupancy(
+    user_id: int,
+    payload: TeamMemberOccupancyUpdate,
+    manager: ManagerUser,
+    request: Request,
+    db: DbSession,
+) -> UserRead:
+    """Manager evaluates and updates team member's hotel room occupancy entitlement (Single vs Double).
+
+    This profile entitlement governs all hotel bookings for this employee (SOW Section 1.1 item 2).
+    """
+    member = _member_or_404(db, manager, user_id)
+    old_val = str(member.hotel_occupancy_entitlement)
+    new_val = str(payload.hotel_occupancy_entitlement)
+
+    member.hotel_occupancy_entitlement = payload.hotel_occupancy_entitlement
+
+    audit.record(
+        db,
+        action=AuditAction.UPDATE,
+        entity_type="user",
+        entity_id=member.id,
+        summary=f"Manager {manager.full_name} set hotel occupancy entitlement of {member.full_name} to {new_val}",
+        changes={"hotel_occupancy_entitlement": {"from": old_val, "to": new_val}},
+        tenant_id=manager.tenant_id,
+        actor=manager,
+        request=request,
+    )
+    db.commit()
+    db.refresh(member)
+    return _member_read(member)
 
 
 @router.post("/changes/add", response_model=TeamChangeRead, status_code=status.HTTP_201_CREATED)

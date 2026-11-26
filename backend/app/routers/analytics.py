@@ -18,7 +18,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core import clock
-from app.core.deps import AdminUser, DbSession
+from app.core.deps import AdminUser, DbSession, FinanceOrAdmin
 from app.core.enums import AuditAction
 from app.models.request import RequestTraveller, TravelRequest
 from app.schemas.analytics import (
@@ -226,7 +226,7 @@ def split_cost(
 
 
 @router.get("/analytics", response_model=AnalyticsBundle)
-def bundle(actor: AdminUser, db: DbSession, filters: ReportFilters) -> AnalyticsBundle:
+def bundle(actor: FinanceOrAdmin, db: DbSession, filters: ReportFilters) -> AnalyticsBundle:
     """Everything the cost page shows, in one round trip, for one slice.
 
     One call rather than eight, and one read of the rows shared by every
@@ -257,12 +257,12 @@ def bundle(actor: AdminUser, db: DbSession, filters: ReportFilters) -> Analytics
 
 
 @router.get("/analytics/campaigns", response_model=list[CampaignSpend])
-def campaign_spend(actor: AdminUser, db: DbSession, filters: ReportFilters) -> list[CampaignSpend]:
+def campaign_spend(actor: FinanceOrAdmin, db: DbSession, filters: ReportFilters) -> list[CampaignSpend]:
     """Campaign Financials (SOW section 2) on their own. All time unless filtered."""
     return [CampaignSpend(**r) for r in analytics.by_campaign(db, actor.tenant_id, filters)]
 
 
 @router.get("/analytics/uncosted", response_model=list[UncostedRow])
-def uncosted(actor: AdminUser, db: DbSession, filters: ReportFilters) -> list[UncostedRow]:
+def uncosted(actor: FinanceOrAdmin, db: DbSession, filters: ReportFilters) -> list[UncostedRow]:
     """Booked travellers with no cost recorded - the admin's worklist."""
     return [UncostedRow(**r) for r in analytics.uncosted_bookings(db, actor.tenant_id, filters)]

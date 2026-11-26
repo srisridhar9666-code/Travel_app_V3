@@ -1,21 +1,39 @@
-export type Role = 'SUPER_ADMIN' | 'SYSTEM_ADMIN' | 'ADMIN' | 'MANAGER' | 'GROUND_STAFF';
+export type Role = 'SUPER_ADMIN' | 'SYSTEM_ADMIN' | 'ADMIN' | 'FINANCE' | 'MANAGER' | 'VENDOR' | 'GROUND_STAFF';
 
 /** Highest first. Nobody grants or manages a role above their own. */
 export const ROLE_RANK: Record<Role, number> = {
   GROUND_STAFF: 0,
-  MANAGER: 1,
-  ADMIN: 2,
-  SYSTEM_ADMIN: 3,
-  SUPER_ADMIN: 4,
+  VENDOR: 1,
+  MANAGER: 2,
+  FINANCE: 3,
+  ADMIN: 4,
+  SYSTEM_ADMIN: 5,
+  SUPER_ADMIN: 5,
 };
 
 /** Every role that runs the travel desk: approvals, bookings, costs, Team. */
 export const ADMIN_ROLES: Role[] = ['ADMIN', 'SYSTEM_ADMIN', 'SUPER_ADMIN'];
 /** The roles that look after accounts and settings. */
 export const ACCOUNT_ROLES: Role[] = ['SYSTEM_ADMIN', 'SUPER_ADMIN'];
+/** The roles that audit reimbursements and record settlements. */
+export const FINANCE_ROLES: Role[] = ['FINANCE', 'SYSTEM_ADMIN', 'SUPER_ADMIN'];
+/** Commercial vendor partner roles. */
+export const VENDOR_ROLES: Role[] = ['VENDOR'];
 
 export function isAdminRole(role: Role | undefined | null): boolean {
   return role != null && ADMIN_ROLES.includes(role);
+}
+
+export function isSuperAdmin(role: string | Role | undefined | null): boolean {
+  return role === 'SUPER_ADMIN' || role === 'SYSTEM_ADMIN';
+}
+
+export function isFinanceRole(role: Role | undefined | null): boolean {
+  return role != null && FINANCE_ROLES.includes(role);
+}
+
+export function isVendorRole(role: Role | undefined | null): boolean {
+  return role != null && VENDOR_ROLES.includes(role);
 }
 export type Designation = 'EXECUTIVE' | 'TEAM_LEAD' | 'MANAGER';
 /** OTHER and UNDISCLOSED only appear on people saved before gender had to be
@@ -42,6 +60,17 @@ export interface UserProfile {
   /** Who they report to - ground staff in a manager's team. */
   manager_id?: number | null;
   manager_name?: string | null;
+  vendor_id?: number | null;
+  vendor_name?: string | null;
+  is_vendor?: boolean;
+  is_admin?: boolean;
+  is_manager?: boolean;
+  hotel_occupancy_entitlement?: HotelOccupancy;
+  upi_id?: string | null;
+  bank_name?: string | null;
+  bank_account_number?: string | null;
+  account_holder_name?: string | null;
+  ifsc_code?: string | null;
   theme_preference: ThemePreference;
   status: UserStatus;
   is_active: boolean;
@@ -74,6 +103,14 @@ export interface UserRow {
   /** Who they report to - ground staff in a manager's team. */
   manager_id: number | null;
   manager_name: string | null;
+  vendor_id?: number | null;
+  vendor_name?: string | null;
+  hotel_occupancy_entitlement?: HotelOccupancy;
+  upi_id?: string | null;
+  bank_name?: string | null;
+  bank_account_number?: string | null;
+  account_holder_name?: string | null;
+  ifsc_code?: string | null;
   status: UserStatus;
   status_changed_at: string | null;
   /** Mirrors status === 'ACTIVE'. */
@@ -140,20 +177,25 @@ export const ROLE_LABELS: Record<Role, string> = {
   // No longer granted: folded into Admin. Kept so an old account still reads.
   SYSTEM_ADMIN: 'System admin (old)',
   ADMIN: 'Admin',
+  FINANCE: 'Finance',
   MANAGER: 'Manager',
+  VENDOR: 'Vendor',
   GROUND_STAFF: 'Ground staff',
 };
 
 /** What each role can do, in a line - shown under the role pickers. */
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
-  GROUND_STAFF: 'Raises and tracks their own travel. Can report to a manager.',
+  GROUND_STAFF: 'Raises and tracks their own travel, captures telemetry, and submits expense reimbursements.',
+  VENDOR: 'Contracted partner: submits hotel proposals, assigns cabs & drivers, issues tickets.',
   MANAGER:
-    "Leads a team: sees their trips (never costs), asks an admin to add, edit or remove members, and runs campaigns.",
+    'Leads a team: mandatory L1 approvals, occupancy evaluation, campaign & team management, reimbursement review.',
+  FINANCE:
+    'Audits reimbursement claims against policy limits, manages itemized deductions, and records UTR disbursements.',
   ADMIN:
-    'Runs the travel desk: approvals, bookings, costs, people, departments and the activity log. Keeps vendors and creates and edits vendor invoices.',
+    'Runs the central travel desk: L2 approvals, dispatch to vendors, direct booking with AI, and cost tracking.',
   SYSTEM_ADMIN: 'No longer used - the same as Admin. Choose Admin or Super admin.',
   SUPER_ADMIN:
-    'The top level: everything an admin sees, plus approving vendor invoices, purging old identity documents and managing other super admins. Reads, but does not create or edit, invoices and vendors.',
+    'The top executive level: system governance, vendor invoice releases, master policy setup, audit ledger.',
 };
 
 /** A manager's ask to change their team, held until an admin decides. */
@@ -239,6 +281,12 @@ export interface OpenTrips {
 export interface ProfileUpdate {
   full_name?: string;
   phone?: string | null;
+  hotel_occupancy_entitlement?: HotelOccupancy;
+  upi_id?: string | null;
+  bank_name?: string | null;
+  bank_account_number?: string | null;
+  account_holder_name?: string | null;
+  ifsc_code?: string | null;
 }
 
 /** A password change signs out every other device, this one included; the
@@ -384,10 +432,19 @@ export type RequestStatus =
   | 'SUBMITTED'
   | 'PARTIALLY_APPROVED'
   | 'APPROVED'
+  | 'READY_FOR_VENDOR'
   | 'BOOKED'
   | 'REJECTED'
   | 'CANCELLED'
   | 'EXPIRED';
+
+export type CityTier = 'CATEGORY_A' | 'CATEGORY_B' | 'CATEGORY_C';
+
+export const CITY_TIER_LABELS: Record<CityTier, string> = {
+  CATEGORY_A: 'Category A (Tier 1 Metros)',
+  CATEGORY_B: 'Category B (State Capitals & Tier 2)',
+  CATEGORY_C: 'Category C (Other Cities & Districts)',
+};
 
 export type TravellerStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'BOOKED' | 'CANCELLED';
 
@@ -484,6 +541,7 @@ export interface RequestTraveller {
    *  active - shown to anyone who can see the request. */
   manager_id: number | null;
   manager_name: string | null;
+  manager_reviewed?: boolean;
   /** What the manager said. Only an admin, or this traveller's own manager,
    *  is sent it; everyone else - the traveller included - gets null. */
   manager_recommendation: ManagerRecommendation | null;
@@ -534,6 +592,8 @@ export interface CoStayMatch {
   designation: Designation | null;
   request_id: number;
   hotel_city: string;
+  hotel_name?: string | null;
+  same_hotel?: boolean;
   check_in: string;
   check_out: string | null;
   overlapping_nights: number;
@@ -582,14 +642,22 @@ export interface TravelRequest {
   end_at: string | null;
 
   hotel_city: string | null;
+  hotel_occupancy?: HotelOccupancy;
+  city_tier?: CityTier | null;
+  lodging_limit_per_night?: number | null;
   check_in: string | null;
   check_out: string | null;
+  hotel_verification_status?: 'CHECKED_IN' | 'CHECKED_OUT' | 'VERIFIED' | null;
+  assigned_vendor_id?: number | null;
+  assigned_vendor_name?: string | null;
+  selected_hotel_proposal_id?: number | null;
 
   /** A cab's size, local or outstation, and outstation's rough distance.
    *  Null on flights and hotels. */
   cab_type: CabType | null;
   cab_trip: CabTrip | null;
   cab_distance_km: number | null;
+  cab_telemetry_status?: 'IN_PROGRESS' | 'COMPLETED' | 'VERIFIED' | null;
   /** The car an admin recorded as sent. Null until they have. */
   booked_cab_type: CabType | null;
   cab_vehicle_number: string | null;
@@ -695,6 +763,7 @@ export const REQUEST_STATUS_LABELS: Record<RequestStatus, string> = {
   SUBMITTED: 'Submitted',
   PARTIALLY_APPROVED: 'Partly approved',
   APPROVED: 'Approved',
+  READY_FOR_VENDOR: 'Ready for Vendor',
   BOOKED: 'Booked',
   REJECTED: 'Rejected',
   CANCELLED: 'Cancelled',
@@ -728,6 +797,7 @@ export interface QueueCounts {
   awaiting: number;
   partially_approved: number;
   approved: number;
+  ready_for_vendor?: number;
   booked: number;
   rejected: number;
   cancelled: number;
@@ -1397,6 +1467,9 @@ export interface Vendor {
   /** Trips whose cost was paid to them, and invoices raised against them. */
   traveller_count: number;
   invoice_count: number;
+  portal_user_id?: number | null;
+  portal_email?: string | null;
+  portal_user_status?: string | null;
 }
 
 export interface VendorPayload {
@@ -1407,6 +1480,9 @@ export interface VendorPayload {
   email?: string | null;
   gstin?: string | null;
   notes?: string | null;
+  create_login?: boolean;
+  login_email?: string | null;
+  login_password?: string | null;
 }
 
 export type InvoiceStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
@@ -1427,9 +1503,8 @@ export const INVOICE_STATUS_TONES: Record<InvoiceStatus, 'neutral' | 'warning' |
   REJECTED: 'danger',
 };
 
-/** Who prepares invoices and keeps the vendor list. Not the super admin: they
- *  approve invoices, and whoever approves a bill must not have written it. */
-export const INVOICE_EDITOR_ROLES: Role[] = ['ADMIN', 'SYSTEM_ADMIN'];
+/** Who prepares invoices and keeps the vendor list. */
+export const INVOICE_EDITOR_ROLES: Role[] = ['ADMIN', 'SYSTEM_ADMIN', 'FINANCE', 'VENDOR'];
 
 export const isInvoiceEditor = (role: Role | null | undefined): boolean =>
   !!role && INVOICE_EDITOR_ROLES.includes(role);
@@ -1493,6 +1568,9 @@ export interface Invoice extends InvoiceSummary {
   updated_by_name: string | null;
   updated_at: string;
   submitted_by_name: string | null;
+  verified_by_name?: string | null;
+  verified_at?: string | null;
+  verification_comment?: string | null;
   decided_by_name: string | null;
   decision_comment: string | null;
   paid_by_name: string | null;
@@ -1503,6 +1581,7 @@ export interface Invoice extends InvoiceSummary {
   can_edit: boolean;
   can_submit: boolean;
   can_delete: boolean;
+  can_verify?: boolean;
   can_decide: boolean;
   /** A super admin, on an approved invoice: mark it paid, or correct it. */
   can_record_payment: boolean;
@@ -1547,4 +1626,382 @@ export interface InvoicePayload {
   traveller_ids: number[];
   vendor_invoice_ref?: string | null;
   notes?: string | null;
+}
+
+/* ============================================================================
+ * Sriyatra V4 Domain Types: Hotel Sourcing, Telemetry, and Reimbursements
+ * ============================================================================ */
+
+export type HotelOccupancy = 'SINGLE' | 'DOUBLE' | 'TRIPLE';
+export type HotelProposalStatus = 'PROPOSED' | 'SELECTED' | 'CONFIRMED' | 'REJECTED';
+
+export interface HotelProposal {
+  id: number;
+  request_id: number;
+  vendor_id: number;
+  vendor_name?: string | null;
+  hotel_name: string;
+  address: string;
+  landmark?: string | null;
+  google_maps_url?: string | null;
+  room_category: string;
+  nightly_rate?: number | null;
+  amenities?: string[] | null;
+  status: HotelProposalStatus;
+  selected_by_id?: number | null;
+  selected_by_name?: string | null;
+  selected_at?: string | null;
+  vendor_notes?: string | null;
+  city_tier?: CityTier | null;
+  policy_limit_per_night?: number | null;
+  policy_rate_limit?: number | null;
+  is_within_policy?: boolean | null;
+  is_policy_compliant?: boolean;
+  excess_per_night?: number | null;
+  excess_amount?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HotelProposalCreateItem {
+  hotel_name: string;
+  address: string;
+  landmark?: string | null;
+  google_maps_url?: string | null;
+  room_category?: string;
+  nightly_rate: number;
+  amenities?: string[];
+  vendor_notes?: string | null;
+  save_to_directory?: boolean;
+}
+
+export interface SavedHotel {
+  id: number;
+  hotel_name: string;
+  city: string;
+  state?: string | null;
+  address: string;
+  landmark?: string | null;
+  google_maps_url?: string | null;
+  room_category: string;
+  nightly_rate: number;
+  contact_phone?: string | null;
+  amenities?: string[] | null;
+  vendor_notes?: string | null;
+  vendor_id?: number | null;
+  vendor_name?: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavedHotelPayload {
+  hotel_name: string;
+  city: string;
+  state?: string | null;
+  address: string;
+  landmark?: string | null;
+  google_maps_url?: string | null;
+  room_category?: string;
+  nightly_rate?: number;
+  contact_phone?: string | null;
+  amenities?: string[];
+  vendor_notes?: string | null;
+  vendor_id?: number | null;
+}
+
+export interface TelemetrySettings {
+  require_telemetry_checkout: boolean;
+  max_monthly_missed_photos: number;
+  ai_ticket_autofill_enabled?: boolean;
+}
+
+export interface UserTelemetryStatus {
+  user_id: number;
+  user_name: string;
+  missed_cabs_count: number;
+  missed_hotels_count: number;
+  total_missed_count: number;
+  max_allowed: number;
+  is_locked: boolean;
+  telemetry_unlocked_at?: string | null;
+  require_telemetry_checkout: boolean;
+}
+
+export type TelemetryStatus = 'IN_PROGRESS' | 'COMPLETED' | 'VERIFIED';
+export type StayVerificationStatus = 'CHECKED_IN' | 'CHECKED_OUT' | 'VERIFIED';
+
+export interface CabTelemetry {
+  id: number;
+  request_id: number;
+  traveller_id?: number | null;
+  driver_name?: string | null;
+  driver_phone?: string | null;
+  vehicle_number?: string | null;
+  vehicle_model?: string | null;
+  start_odometer_km?: number | null;
+  start_odometer_photo_url?: string | null;
+  start_photo_source?: 'CAMERA' | 'FILE_UPLOAD' | null;
+  start_time_ist?: string | null;
+  start_gps_lat?: number | null;
+  start_gps_lng?: number | null;
+  start_location_name?: string | null;
+  end_odometer_km?: number | null;
+  end_odometer_photo_url?: string | null;
+  end_photo_source?: 'CAMERA' | 'FILE_UPLOAD' | null;
+  end_time_ist?: string | null;
+  end_gps_lat?: number | null;
+  end_gps_lng?: number | null;
+  end_location_name?: string | null;
+  total_km?: number | null;
+  total_duration_minutes?: number | null;
+  status: TelemetryStatus;
+  is_local_exceeded?: boolean;
+  local_excess_km?: number;
+  is_verified: boolean;
+  verified_by_id?: number | null;
+  verified_by_name?: string | null;
+  verified_at?: string | null;
+  verification_notes?: string | null;
+  force_closed_by_id?: number | null;
+  force_closed_by_name?: string | null;
+  force_closed_at?: string | null;
+  force_close_reason?: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface CabTripStartPayload {
+  start_odometer_km: number;
+  start_odometer_photo_url?: string | null;
+  start_photo_source?: 'CAMERA' | 'FILE_UPLOAD' | null;
+  start_gps_lat?: number | null;
+  start_gps_lng?: number | null;
+  driver_name?: string | null;
+  driver_phone?: string | null;
+  vehicle_number?: string | null;
+  vehicle_model?: string | null;
+  notes?: string | null;
+}
+
+export interface CabTripEndPayload {
+  end_odometer_km: number;
+  end_odometer_photo_url?: string | null;
+  end_photo_source?: 'CAMERA' | 'FILE_UPLOAD' | null;
+  end_gps_lat?: number | null;
+  end_gps_lng?: number | null;
+  notes?: string | null;
+}
+
+export interface HotelStayVerification {
+  id: number;
+  request_id: number;
+  traveller_id?: number | null;
+  user_id: number;
+  user_name?: string | null;
+  check_in_time?: string | null;
+  check_in_lat?: number | null;
+  check_in_lng?: number | null;
+  check_in_location_name?: string | null;
+  room_number?: string | null;
+  check_in_photo_url?: string | null;
+  check_in_photo_source?: string | null;
+  check_in_remarks?: string | null;
+  check_out_time?: string | null;
+  check_out_lat?: number | null;
+  check_out_lng?: number | null;
+  check_out_location_name?: string | null;
+  folio_bill_url?: string | null;
+  check_out_photo_source?: string | null;
+  check_out_remarks?: string | null;
+  status: StayVerificationStatus;
+  reimbursement_prompted: boolean;
+  is_verified: boolean;
+  verified_by_id?: number | null;
+  verified_by_name?: string | null;
+  verified_at?: string | null;
+  verification_notes?: string | null;
+  force_closed_by_id?: number | null;
+  force_closed_by_name?: string | null;
+  force_closed_at?: string | null;
+  force_close_reason?: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface HotelCheckInPayload {
+  room_number: string;
+  check_in_lat?: number | null;
+  check_in_lng?: number | null;
+  check_in_photo_url?: string | null;
+  check_in_photo_source?: 'CAMERA' | 'FILE_UPLOAD' | null;
+  check_in_remarks?: string | null;
+}
+
+export interface HotelCheckOutPayload {
+  folio_bill_url?: string | null;
+  check_out_photo_source?: 'CAMERA' | 'FILE_UPLOAD' | null;
+  check_out_remarks?: string | null;
+  check_out_lat?: number | null;
+  check_out_lng?: number | null;
+}
+
+export interface VerificationReviewPayload {
+  notes?: string | null;
+}
+
+export type ExpenseCategory = 'FOOD' | 'LOCAL_TRANSIT' | 'MISCELLANEOUS';
+export type ExpenseStatus =
+  | 'DRAFT'
+  | 'SUBMITTED'
+  | 'MANAGER_ENDORSED'
+  | 'FINANCE_APPROVED'
+  | 'PARTIALLY_APPROVED'
+  | 'REJECTED'
+  | 'SETTLED';
+export type PaymentMode = 'NEFT' | 'RTGS' | 'UPI' | 'CHEQUE' | 'OTHER';
+
+export interface ExpenseItem {
+  id: number;
+  claim_id: number;
+  expense_date: string;
+  category: ExpenseCategory;
+  vendor_merchant_name?: string | null;
+  bill_number?: string | null;
+  bill_date?: string | null;
+  claimed_amount: number;
+  approved_amount: number;
+  deducted_amount: number;
+  deduction_reason?: string | null;
+  receipt_url?: string | null;
+  is_receipt_attached: boolean;
+  justification?: string | null;
+  created_at: string;
+}
+
+export interface ExpenseClaim {
+  id: number;
+  claim_code: string;
+  user_id: number;
+  user_name?: string | null;
+  employee_code?: string | null;
+  department_name?: string | null;
+  project_id: number;
+  project_name?: string | null;
+  project_code?: string | null;
+  request_id?: number | null;
+  destination_city: string;
+  travel_start_date: string;
+  travel_end_date: string;
+  employee_payment_mode?: 'ONLINE' | 'CASH' | null;
+  expense_type?: string | null;
+  expense_type_other?: string | null;
+  remarks?: string | null;
+  upi_id?: string | null;
+  bank_name?: string | null;
+  bank_account_number?: string | null;
+  account_holder_name?: string | null;
+  ifsc_code?: string | null;
+  attachment_url?: string | null;
+  status: ExpenseStatus;
+  total_claimed_amount: number;
+  total_approved_amount: number;
+  total_deducted_amount: number;
+  manager_id?: number | null;
+  manager_name?: string | null;
+  manager_reviewed_at?: string | null;
+  manager_notes?: string | null;
+  manager_endorsed: boolean;
+  finance_auditor_id?: number | null;
+  finance_auditor_name?: string | null;
+  finance_audited_at?: string | null;
+  finance_deduction_notes?: string | null;
+  payment_mode?: PaymentMode | null;
+  payment_date?: string | null;
+  bank_utr_number?: string | null;
+  settled_at?: string | null;
+  settled_by_name?: string | null;
+  items: ExpenseItem[];
+  is_food_cap_exceeded?: boolean;
+  food_excess_amount?: number;
+  is_unbilled_transit_exceeded?: boolean;
+  unbilled_transit_excess_amount?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExpenseItemCreatePayload {
+  expense_date: string;
+  category?: ExpenseCategory;
+  vendor_merchant_name?: string | null;
+  bill_number?: string | null;
+  bill_date?: string | null;
+  claimed_amount: number;
+  receipt_url?: string | null;
+  justification?: string | null;
+}
+
+export interface ExpenseClaimCreatePayload {
+  project_id: number;
+  request_id?: number | null;
+  destination_city: string;
+  travel_start_date: string;
+  travel_end_date: string;
+  employee_payment_mode?: 'ONLINE' | 'CASH' | null;
+  expense_type?: string | null;
+  expense_type_other?: string | null;
+  remarks?: string | null;
+  upi_id?: string | null;
+  bank_name?: string | null;
+  bank_account_number?: string | null;
+  account_holder_name?: string | null;
+  ifsc_code?: string | null;
+  attachment_url?: string | null;
+  total_amount?: number | null;
+  items?: ExpenseItemCreatePayload[];
+}
+
+export interface ManagerEndorsementPayload {
+  endorsed: boolean;
+  notes?: string | null;
+}
+
+export interface ItemDeductionPayload {
+  item_id: number;
+  deducted_amount: number;
+  deduction_reason: string;
+}
+
+export interface FinanceAuditPayload {
+  decision: ExpenseStatus;
+  deductions?: ItemDeductionPayload[];
+  notes?: string | null;
+}
+
+export interface DisbursementSettlementPayload {
+  payment_mode: PaymentMode;
+  payment_date: string;
+  bank_utr_number: string;
+}
+
+export type BugReportStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED';
+
+export interface BugReport {
+  id: number;
+  reporter_id: number;
+  reporter_name: string;
+  reporter_email?: string | null;
+  user_role?: string | null;
+  page_url?: string | null;
+  page_title?: string | null;
+  browser_info?: string | null;
+  comment: string;
+  has_screenshot: boolean;
+  status: BugReportStatus;
+  resolution_note?: string | null;
+  resolved_by_id?: number | null;
+  resolved_by_name?: string | null;
+  resolved_at?: string | null;
+  created_at: string;
+  updated_at: string;
 }

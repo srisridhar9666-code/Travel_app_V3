@@ -41,3 +41,6 @@ web/*.local
 Thumbs.db
 Desktop.ini
 *.log
+
+# Scratch scripts
+scratch/

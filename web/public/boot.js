@@ -18,23 +18,18 @@
     document.documentElement.dataset.theme = 'light';
   }
 
-  // Phones and tablets open the desktop layout, as a browser's "Desktop site"
-  // does: the page is laid out 1280px wide and starts zoomed out to fit. Unless
-  // this browser chose the phone layout (the switch is in the menu; see
-  // src/lib/viewMode.ts, which owns the key and the same test). Any touch
-  // screen under 1024px on its short side counts - that is where the
-  // responsive layout would otherwise swap the sidebar for a bottom bar.
+  // Phones and tablets default to the desktop layout (1280px width in index.html,
+  // matching Chrome's "Desktop site") so ground users immediately see full desktop
+  // tables and status controls. Only switch to mobile responsive width if the user
+  // explicitly chose the phone layout via the switcher (stored in sriyatra.view).
   try {
-    var touch =
-      (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ||
-      navigator.maxTouchPoints > 0;
-    var phone = touch && Math.min(screen.width, screen.height) < 1024;
-    if (phone && localStorage.getItem('sriyatra.view') !== 'mobile') {
-      document
-        .querySelector('meta[name="viewport"]')
-        .setAttribute('content', 'width=1280, viewport-fit=cover');
+    if (localStorage.getItem('sriyatra.view') === 'mobile') {
+      var meta = document.querySelector('meta[name="viewport"]');
+      if (meta) {
+        meta.setAttribute('content', 'width=device-width, initial-scale=1, viewport-fit=cover');
+      }
     }
   } catch (e) {
-    // Storage blocked: the desktop layout, the default, still applies above.
+    // Storage blocked: the desktop layout in index.html still applies.
   }
 })();

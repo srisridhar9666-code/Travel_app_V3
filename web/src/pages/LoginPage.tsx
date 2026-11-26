@@ -150,7 +150,7 @@ export default function LoginPage() {
 
         {/* Under the form rather than on the brand panel, which phones never see. */}
         <CompanyCredit className="justify-center pt-6" />
-        <CreatorCredit className="pt-1 text-center" />
+        <CreatorCredit className="pt-1.5 justify-center" />
       </div>
 
       {/* Brand side. Hidden on small screens - ground staff sign in from phones,

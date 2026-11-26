@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   BarChart3,
   Bell,
+  Bug,
   Building2,
   CalendarCheck,
   CheckSquare,
@@ -21,12 +22,14 @@ import {
   Store,
   Users,
   UsersRound,
+  Wallet,
   X,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 
+import { BugReportWidget } from '@/components/BugReportWidget';
 import { CompanyCredit, CreatorCredit, Logo, LogoLockup } from '@/components/Logo';
 import NotificationBell from '@/components/NotificationBell';
 import { PageErrorBoundary, ServerStatusBanner } from '@/components/ServerStatus';
@@ -46,7 +49,7 @@ import { cn } from '@/lib/utils';
 import { isPhone, setViewMode, viewMode } from '@/lib/viewMode';
 import { useAuth } from '@/store/auth';
 import { useTheme } from '@/store/theme';
-import { ADMIN_ROLES, ROLE_LABELS, isAdminRole, type Role } from '@/types';
+import { ADMIN_ROLES, ROLE_LABELS, isAdminRole, isSuperAdmin, type Role } from '@/types';
 
 type Group = 'Workspace' | 'Operations' | 'Manage';
 
@@ -71,22 +74,24 @@ const ADMINS = ADMIN_ROLES;
 const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, group: 'Workspace', bottom: 1 },
   { to: '/requests', label: 'My requests', icon: CalendarCheck, group: 'Workspace', bottom: 2 },
+  { to: '/expenses', label: 'Reimbursements', icon: Wallet, group: 'Workspace' },
   { to: '/notifications', label: 'Notifications', icon: Bell, group: 'Workspace', badge: 'unread', bottom: 3 },
-  { to: '/approvals', label: 'Approvals', icon: CheckSquare, roles: ADMINS, group: 'Operations', badge: 'queue', bottom: 0 },
+  { to: '/approvals', label: 'Approvals & Orders', icon: CheckSquare, roles: [...ADMINS, 'VENDOR'], group: 'Operations', badge: 'queue', bottom: 0 },
   // A manager's half of two-level approval. On the phone bar too: for a
   // manager it is the page with work waiting on them.
   { to: '/team-approvals', label: 'Team approvals', icon: ClipboardCheck, roles: ['MANAGER'], group: 'Operations', badge: 'review', bottom: 0 },
-  { to: '/travel-logs', label: 'Travel logs', icon: History, roles: ADMINS, group: 'Operations' },
-  { to: '/analytics', label: 'Cost analytics', icon: BarChart3, roles: ADMINS, group: 'Operations' },
+  { to: '/travel-logs', label: 'Travel logs', icon: History, roles: [...ADMINS, 'FINANCE'], group: 'Operations' },
+  { to: '/analytics', label: 'Cost analytics', icon: BarChart3, roles: [...ADMINS, 'FINANCE'], group: 'Operations' },
   // Every admin tier reads invoices; the count is for the super admin, the
-  // only one who can approve the ones waiting.
-  { to: '/invoices', label: 'Invoices', icon: Receipt, roles: ADMINS, group: 'Operations', badge: 'invoices' },
+  // only one who can approve the ones waiting. Finance reviews reconciled vendor invoices, and vendors raise them.
+  { to: '/invoices', label: 'Invoices', icon: Receipt, roles: [...ADMINS, 'FINANCE', 'VENDOR'], group: 'Operations', badge: 'invoices' },
   { to: '/my-team', label: 'My team', icon: UsersRound, roles: ['MANAGER'], group: 'Manage' },
   { to: '/projects', label: 'Campaigns', icon: FolderKanban, roles: [...ADMINS, 'MANAGER'], group: 'Manage' },
   { to: '/team', label: 'Team', icon: Users, roles: ADMINS, group: 'Manage', badge: 'team' },
   { to: '/departments', label: 'Departments', icon: Building2, roles: ADMINS, group: 'Manage' },
   { to: '/vendors', label: 'Vendors', icon: Store, roles: ADMINS, group: 'Manage' },
   { to: '/audit', label: 'Activity log', icon: ScrollText, roles: ADMINS, group: 'Manage' },
+  { to: '/bug-reports', label: 'Bug reports', icon: Bug, roles: ADMINS, group: 'Manage' },
 ];
 
 const GROUPS: Group[] = ['Workspace', 'Operations', 'Manage'];
@@ -227,7 +232,7 @@ export default function AppShell() {
   const invoices = useQuery({
     queryKey: ['invoices', 'badge'],
     queryFn: () => fetchInvoices({ status: 'SUBMITTED', limit: 1 }),
-    enabled: user?.role === 'SUPER_ADMIN',
+    enabled: isSuperAdmin(user?.role) || user?.role === 'FINANCE',
   });
   const countFor = (item: NavItem) =>
     item.badge === 'unread'
@@ -361,7 +366,7 @@ export default function AppShell() {
                             cn(
                               'relative flex h-10 items-center gap-3 rounded-xl px-3 text-sm transition-colors',
                               isActive
-                                ? 'bg-sidebar-fg/[0.08] font-semibold text-sidebar-fg dark:bg-sidebar-fg/[0.12]'
+                                ? 'bg-brand-soft/70 font-semibold text-brand-strong dark:bg-sidebar-fg/[0.14] dark:text-sidebar-fg'
                                 : 'text-sidebar-fg/70 hover:bg-sidebar-fg/[0.05] hover:text-sidebar-fg',
                               rail && 'lg:justify-center lg:px-0',
                             )
@@ -491,6 +496,7 @@ export default function AppShell() {
             <Outlet />
           </PageErrorBoundary>
         </main>
+        <BugReportWidget />
 
         {/* Route changes are silent in a single-page app. This announces the
             new page so a screen-reader user knows the link did something. */}

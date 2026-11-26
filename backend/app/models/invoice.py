@@ -82,6 +82,15 @@ class Invoice(Base, TenantMixin, TimestampMixin):
         nullable=True,
     )
     submitted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    # --- verification by admin or finance officer before final super admin approval ---
+    verified_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_invoices_verified_by"),
+        nullable=True,
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    verification_comment: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     decided_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL", name="fk_invoices_decided_by"),
         nullable=True,
@@ -107,6 +116,7 @@ class Invoice(Base, TenantMixin, TimestampMixin):
     created_by = relationship("User", foreign_keys=[created_by_id], lazy="joined")
     updated_by = relationship("User", foreign_keys=[updated_by_id], lazy="joined")
     submitted_by = relationship("User", foreign_keys=[submitted_by_id], lazy="joined")
+    verified_by = relationship("User", foreign_keys=[verified_by_id], lazy="joined")
     decided_by = relationship("User", foreign_keys=[decided_by_id], lazy="joined")
     paid_by = relationship("User", foreign_keys=[paid_by_id], lazy="joined")
     lines: Mapped[list["InvoiceLine"]] = relationship(

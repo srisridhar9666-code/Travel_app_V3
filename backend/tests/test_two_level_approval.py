@@ -210,7 +210,7 @@ class TestWhoMayRecommend:
 
     def test_a_request_with_none_of_their_team_still_pending_is_refused(self, client, org):
         made = raise_hotel(client, org)
-        decide(client, org, made["id"], made["travellers"][0]["id"])
+        decide(client, org, made["id"], made["travellers"][0]["id"], to="REJECTED", reason="Budget closed")
         r = recommend(client, org, made["id"])
         assert r.status_code == 409
         assert "already decided" in r.json()["detail"]
@@ -250,7 +250,7 @@ class TestWhoMayRecommend:
         assert recommend(client, org, made["id"], traveller_ids=[999999]).status_code == 404
         assert recommend(client, org, made["id"], traveller_ids=[]).status_code == 422
 
-        decide(client, org, made["id"], by_name["Sana Khan"])
+        decide(client, org, made["id"], by_name["Sana Khan"], to="REJECTED", reason="Not needed")
         r = recommend(client, org, made["id"], traveller_ids=[by_name["Sana Khan"]])
         assert r.status_code == 409
         assert "Sana Khan" in r.json()["detail"]
@@ -281,7 +281,9 @@ class TestRecommending:
         assert {n.user_id for n in told} == {org["owner"].id, org["admin"].id}
         assert "Recommended - Needed for the audit" in told[0].body
         mail = notices(db, "MANAGER_RECOMMENDED", channel=NotificationChannel.EMAIL)
-        assert len(mail) == 2
+        # Only operational admins get the email (Super Admin does not receive recommendation emails).
+        assert len(mail) == 1
+        assert mail[0].to_address == org["admin"].email
         assert "Their comment: Needed for the audit" in mail[0].body
         assert mail[0].body.rstrip().endswith("/approvals")
 
@@ -512,6 +514,7 @@ class TestTheDecision:
 
     def test_the_ledger_shows_who_was_copied(self, client, org):
         made = raise_hotel(client, org)
+        recommend(client, org, made["id"])
         decide(client, org, made["id"], made["travellers"][0]["id"])
         rows = client.get("/notifications/ledger", headers=auth(org["admin"]),
                           params={"channel": "EMAIL", "search": "approved"}).json()["items"]

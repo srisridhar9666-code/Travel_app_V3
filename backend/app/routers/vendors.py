@@ -14,12 +14,19 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 
 from app.core.deps import AdminUser, DbSession, InvoiceEditor
-from app.core.enums import AuditAction
+from app.core.enums import AuditAction, Gender, Role, UserStatus
+from app.core.security import hash_password
 from app.models.invoice import Invoice
 from app.models.request import RequestTraveller
 from app.models.user import User
 from app.models.vendor import Vendor
-from app.schemas.vendor import VendorCreate, VendorRead, VendorUpdate
+from app.schemas.vendor import (
+    VendorCreate,
+    VendorLoginRequest,
+    VendorLoginResponse,
+    VendorRead,
+    VendorUpdate,
+)
 from app.services import audit
 
 router = APIRouter(prefix="/vendors", tags=["vendors"])
@@ -28,13 +35,13 @@ router = APIRouter(prefix="/vendors", tags=["vendors"])
 _FIELDS = ("name", "kind", "contact_name", "phone", "email", "gstin", "notes")
 
 
-def _counts(db: DbSession, tenant_id: str, ids: list[int]) -> tuple[dict[int, int], dict[int, int]]:
-    """Costs recorded against each vendor, and invoices raised against them.
+def _counts(db: DbSession, tenant_id: str, ids: list[int]) -> tuple[dict[int, int], dict[int, int], dict[int, User]]:
+    """Costs recorded against each vendor, invoices raised against them, and linked portal users.
 
-    Two grouped queries for the whole list rather than two per row.
+    Grouped queries for the whole list rather than queries per row.
     """
     if not ids:
-        return {}, {}
+        return {}, {}, {}
     travellers = dict(
         db.execute(
             select(RequestTraveller.vendor_id, func.count(RequestTraveller.id))
@@ -49,10 +56,24 @@ def _counts(db: DbSession, tenant_id: str, ids: list[int]) -> tuple[dict[int, in
             .group_by(Invoice.vendor_id)
         ).all()
     )
-    return travellers, invoices
+    users = db.execute(
+        select(User).where(User.tenant_id == tenant_id, User.vendor_id.in_(ids))
+    ).scalars().all()
+    portal_users: dict[int, User] = {}
+    for u in users:
+        if u.vendor_id is not None and u.vendor_id not in portal_users:
+            portal_users[u.vendor_id] = u
+
+    return travellers, invoices, portal_users
 
 
-def _read(vendor: Vendor, travellers: dict[int, int], invoices: dict[int, int]) -> VendorRead:
+def _read(
+    vendor: Vendor,
+    travellers: dict[int, int],
+    invoices: dict[int, int],
+    portal_users: dict[int, User] | None = None,
+) -> VendorRead:
+    portal_user = portal_users.get(vendor.id) if portal_users else None
     return VendorRead(
         id=vendor.id,
         name=vendor.name,
@@ -66,6 +87,9 @@ def _read(vendor: Vendor, travellers: dict[int, int], invoices: dict[int, int]) 
         created_at=vendor.created_at,
         traveller_count=travellers.get(vendor.id, 0),
         invoice_count=invoices.get(vendor.id, 0),
+        portal_user_id=portal_user.id if portal_user else None,
+        portal_email=portal_user.email if portal_user else None,
+        portal_user_status=portal_user.status.value if portal_user else None,
     )
 
 
@@ -109,8 +133,8 @@ def list_vendors(
             select(Vendor).where(*filters).order_by(Vendor.is_active.desc(), Vendor.name)
         ).scalars()
     )
-    travellers, invoices = _counts(db, actor.tenant_id, [v.id for v in rows])
-    return [_read(v, travellers, invoices) for v in rows]
+    travellers, invoices, portal_users = _counts(db, actor.tenant_id, [v.id for v in rows])
+    return [_read(v, travellers, invoices, portal_users) for v in rows]
 
 
 @router.post("", response_model=VendorRead, status_code=status.HTTP_201_CREATED)
@@ -118,9 +142,41 @@ def create_vendor(
     payload: VendorCreate, actor: InvoiceEditor, request: Request, db: DbSession
 ) -> VendorRead:
     _name_free(db, actor.tenant_id, payload.name)
-    vendor = Vendor(tenant_id=actor.tenant_id, **payload.model_dump())
+    data = payload.model_dump(exclude={"create_login", "login_email", "login_password"})
+    vendor = Vendor(tenant_id=actor.tenant_id, **data)
     db.add(vendor)
     db.flush()
+
+    if payload.create_login:
+        target_email = (payload.login_email or payload.email or "").strip().lower()
+        if not target_email:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="An email address is required to create a vendor portal login.",
+            )
+        existing = db.execute(
+            select(User).where(User.tenant_id == actor.tenant_id, User.email == target_email)
+        ).scalar_one_or_none()
+        raw_pw = payload.login_password or "Vendor@123"
+        if existing:
+            existing.vendor_id = vendor.id
+            existing.role = Role.VENDOR
+            existing.password_hash = hash_password(raw_pw)
+            existing.status = UserStatus.ACTIVE
+        else:
+            new_user = User(
+                tenant_id=actor.tenant_id,
+                email=target_email,
+                full_name=payload.contact_name or payload.name,
+                role=Role.VENDOR,
+                vendor_id=vendor.id,
+                password_hash=hash_password(raw_pw),
+                status=UserStatus.ACTIVE,
+                gender=Gender.UNDISCLOSED,
+                phone=payload.phone,
+            )
+            db.add(new_user)
+
     audit.record(
         db,
         action=AuditAction.CREATE,
@@ -210,3 +266,72 @@ def activate_vendor(
     vendor_id: int, actor: InvoiceEditor, request: Request, db: DbSession
 ) -> VendorRead:
     return _switch(db, actor, vendor_id, True, request)
+
+
+@router.post("/{vendor_id}/login", response_model=VendorLoginResponse)
+def create_or_reset_vendor_login(
+    vendor_id: int,
+    payload: VendorLoginRequest,
+    actor: InvoiceEditor,
+    db: DbSession,
+) -> VendorLoginResponse:
+    """Create or reset credentials for a vendor portal user."""
+    vendor = _get(db, actor, vendor_id)
+
+    portal_user = db.execute(
+        select(User).where(User.tenant_id == actor.tenant_id, User.vendor_id == vendor.id)
+    ).scalars().first()
+
+    target_email = (payload.email or (portal_user.email if portal_user else vendor.email) or "").strip().lower()
+    if not target_email:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Vendor email is required to create a portal login.",
+        )
+    target_name = payload.full_name or vendor.contact_name or vendor.name
+    raw_pw = payload.password or "Vendor@123"
+
+    if portal_user:
+        portal_user.email = target_email
+        portal_user.full_name = target_name
+        portal_user.password_hash = hash_password(raw_pw)
+        portal_user.status = UserStatus.ACTIVE
+        portal_user.role = Role.VENDOR
+        msg = f"Portal login updated for {vendor.name}"
+    else:
+        clash = db.execute(
+            select(User).where(User.tenant_id == actor.tenant_id, User.email == target_email)
+        ).scalar_one_or_none()
+        if clash:
+            clash.vendor_id = vendor.id
+            clash.role = Role.VENDOR
+            clash.password_hash = hash_password(raw_pw)
+            clash.status = UserStatus.ACTIVE
+            portal_user = clash
+            msg = f"Existing user {target_email} linked as portal login for {vendor.name}"
+        else:
+            portal_user = User(
+                tenant_id=actor.tenant_id,
+                email=target_email,
+                full_name=target_name,
+                role=Role.VENDOR,
+                vendor_id=vendor.id,
+                password_hash=hash_password(raw_pw),
+                status=UserStatus.ACTIVE,
+                gender=Gender.UNDISCLOSED,
+                phone=vendor.phone,
+            )
+            db.add(portal_user)
+            msg = f"Portal login created for {vendor.name}"
+
+    db.commit()
+    db.refresh(portal_user)
+    return VendorLoginResponse(
+        success=True,
+        user_id=portal_user.id,
+        email=portal_user.email,
+        full_name=portal_user.full_name,
+        message=msg,
+        temporary_password=raw_pw,
+    )
+

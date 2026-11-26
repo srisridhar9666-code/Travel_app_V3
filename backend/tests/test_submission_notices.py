@@ -161,7 +161,8 @@ class TestDelivery:
         assert {m.status for m in notices(db, channel=NotificationChannel.EMAIL)} == {
             NotificationStatus.SENT
         }
-        assert sorted(m["to"] for m in outbox.messages) == [
+        assert len(outbox.messages) == 1
+        assert sorted(a.strip() for a in outbox.messages[0]["to"].split(",")) == [
             "arjun@designboxed.com", "priya@designboxed.com",
         ]
 
@@ -170,7 +171,7 @@ class TestDelivery:
         _, queued = raise_flight(db, project, p["ravi"])
         deliver(db, queued)
         deliver(db, queued)
-        assert len(outbox.messages) == 2
+        assert len(outbox.messages) == 1
 
     def test_nothing_queued_is_a_no_op(self):
         notifications.deliver_queued([])
@@ -178,6 +179,7 @@ class TestDelivery:
     def test_the_retry_job_sends_an_email_stranded_by_a_restart(self, db, world, outbox):
         project, p = world
         raise_flight(db, project, p["ravi"])
+        raise_flight(db, project, p["meena"])
         stale, fresh = notices(db, channel=NotificationChannel.EMAIL)
         stale.created_at = naive_utcnow() - timedelta(minutes=10)
         db.commit()

@@ -4,8 +4,10 @@ import {
   Ban,
   CalendarPlus,
   Car,
+  Check,
   CheckCircle2,
   ChevronDown,
+  Clock,
   Download,
   FileText,
   History,
@@ -14,14 +16,18 @@ import {
   Plus,
   Send,
   Users,
+  X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { CabExtensionNote, CabSent } from '@/components/CabDetails';
+import { CabTelemetryCard } from '@/components/CabTelemetryCard';
 import { BookingSummary } from '@/components/BookingDetails';
 import { CancellationNote } from '@/components/CancellationAsks';
 import { ExtendTripModal } from '@/components/ExtendTripModal';
+import { HotelProposalsCard } from '@/components/HotelProposalsCard';
+import { HotelStayVerificationCard } from '@/components/HotelStayVerificationCard';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
 import { RequestTripHighlight } from '@/components/RequestTripHighlight';
@@ -31,6 +37,7 @@ import {
   Button,
   Card,
   CardHeader,
+  DateRangeFilter,
   EmptyState,
   Field,
   Input,
@@ -39,6 +46,7 @@ import {
   ItemNumber,
   Select,
   Skeleton,
+  tabButtonClass,
 } from '@/components/ui';
 import {
   cancelRequest,
@@ -60,8 +68,11 @@ import {
   campaignLabel,
   revisionField,
   revisionValue,
+  isTripActive,
+  matchesDateRange,
 } from '@/lib/requests';
 import { formatInstant, todayInIndia } from '@/lib/time';
+import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
 import {
   REQUEST_STATUS_LABELS,
@@ -82,11 +93,277 @@ const STATUS_TONE: Record<RequestStatus, 'neutral' | 'info' | 'success' | 'warni
   SUBMITTED: 'info',
   PARTIALLY_APPROVED: 'warning',
   APPROVED: 'success',
+  READY_FOR_VENDOR: 'info',
   BOOKED: 'success',
   REJECTED: 'danger',
   CANCELLED: 'neutral',
   EXPIRED: 'neutral',
 };
+
+type StepState = 'done' | 'active' | 'waiting' | 'rejected' | 'muted';
+
+function TravelStatusPipeline({
+  request,
+  myRow,
+}: {
+  request: TravelRequest;
+  myRow?: RequestTraveller;
+}) {
+  if (request.is_draft) {
+    return (
+      <div className="mt-2.5 rounded-lg border border-border/80 bg-surface-sunken px-3 py-2 text-xs text-text-muted">
+        Status: <strong className="text-text">Draft</strong> — Submit this request to send it to your manager and travel desk.
+      </div>
+    );
+  }
+
+  const focusTravellers = myRow ? [myRow] : request.travellers;
+  const hasManager = focusTravellers.some((t) => Boolean(t.manager_id || t.manager_name));
+  const managerNames = [
+    ...new Set(focusTravellers.map((t) => t.manager_name).filter((n): n is string => Boolean(n))),
+  ];
+  const anyAwaitingManager = focusTravellers.some(
+    (t) => t.status === 'PENDING' && Boolean(t.manager_id) && !t.manager_reviewed && !t.manager_recommendation,
+  );
+  const allManagerDone =
+    !hasManager ||
+    focusTravellers.every(
+      (t) => !t.manager_id || t.manager_reviewed || Boolean(t.manager_recommendation) || t.status !== 'PENDING',
+    );
+
+  const terminalBad =
+    request.is_cancelled ||
+    request.status === 'CANCELLED' ||
+    request.status === 'REJECTED' ||
+    request.status === 'EXPIRED' ||
+    myRow?.status === 'REJECTED' ||
+    myRow?.status === 'CANCELLED';
+
+  const isBooked = request.status === 'BOOKED' || myRow?.status === 'BOOKED';
+  const isApproved =
+    isBooked ||
+    request.status === 'APPROVED' ||
+    request.status === 'READY_FOR_VENDOR' ||
+    request.status === 'PARTIALLY_APPROVED' ||
+    myRow?.status === 'APPROVED';
+
+  const isVendorAssigned = Boolean(request.assigned_vendor_name) || request.status === 'READY_FOR_VENDOR';
+  const isTripDone =
+    (request.request_type === 'HOTEL' &&
+      (request.hotel_verification_status === 'CHECKED_OUT' ||
+        request.hotel_verification_status === 'VERIFIED')) ||
+    (request.request_type === 'LOCAL_CAB' &&
+      (request.cab_telemetry_status === 'COMPLETED' ||
+        request.cab_telemetry_status === 'VERIFIED'));
+
+  // Determine clear headline summary
+  let headline = '';
+  let headlineTone = 'text-text-muted';
+  if (request.is_cancelled || request.status === 'CANCELLED' || myRow?.status === 'CANCELLED') {
+    headline = 'Cancelled';
+    headlineTone = 'text-text-muted';
+  } else if (request.status === 'REJECTED' || myRow?.status === 'REJECTED') {
+    headline = `Rejected${myRow?.decided_by_name ? ` by ${myRow.decided_by_name}` : ' by Admin'}`;
+    headlineTone = 'text-danger font-semibold';
+  } else if (request.status === 'EXPIRED') {
+    headline = 'Expired (travel date passed before approval)';
+    headlineTone = 'text-warning font-semibold';
+  } else if (isBooked) {
+    headline = isTripDone
+      ? 'Booked & Completed'
+      : `Booked${request.assigned_vendor_name ? ` via ${request.assigned_vendor_name}` : ''}`;
+    headlineTone = 'text-emerald-700 dark:text-emerald-300 font-semibold';
+  } else if (isApproved && isVendorAssigned) {
+    headline = `Approved · Pending Booking with Vendor (${request.assigned_vendor_name || 'Assigned'})`;
+    headlineTone = 'text-info font-semibold';
+  } else if (isApproved) {
+    headline = 'Approved by Admin · Pending Ticket / Cab Booking';
+    headlineTone = 'text-info font-semibold';
+  } else if (anyAwaitingManager) {
+    headline = `Pending L1 Review with Manager${managerNames.length ? ` (${managerNames.join(', ')})` : ''}`;
+    headlineTone = 'text-amber-700 dark:text-amber-300 font-semibold';
+  } else {
+    headline = 'Pending L2 Approval with Travel Desk Admin';
+    headlineTone = 'text-info font-semibold';
+  }
+
+  const steps: { label: string; detail: string; state: StepState }[] = [
+    {
+      label: 'Submitted',
+      detail: 'Request raised',
+      state: 'done',
+    },
+    {
+      label: 'Manager',
+      detail: !hasManager
+        ? 'Not required'
+        : terminalBad && anyAwaitingManager
+          ? 'Stopped'
+          : anyAwaitingManager
+            ? managerNames[0] ? `With ${managerNames[0]}` : 'Pending review'
+            : allManagerDone
+              ? managerNames[0] ? `Reviewed · ${managerNames[0]}` : 'Reviewed'
+              : 'Pending',
+      state: !hasManager
+        ? 'done'
+        : terminalBad && anyAwaitingManager
+          ? 'muted'
+          : anyAwaitingManager
+            ? 'active'
+            : 'done',
+    },
+    {
+      label: 'Admin Desk',
+      detail:
+        request.is_cancelled || request.status === 'CANCELLED'
+          ? 'Cancelled'
+          : request.status === 'REJECTED' || myRow?.status === 'REJECTED'
+            ? 'Rejected'
+            : request.status === 'EXPIRED'
+              ? 'Expired'
+              : isApproved
+                ? 'Approved'
+                : anyAwaitingManager
+                  ? 'Awaiting L1'
+                  : 'Reviewing',
+      state:
+        request.status === 'REJECTED' || myRow?.status === 'REJECTED'
+          ? 'rejected'
+          : request.is_cancelled || request.status === 'CANCELLED' || request.status === 'EXPIRED'
+            ? 'muted'
+            : isApproved
+              ? 'done'
+              : anyAwaitingManager
+                ? 'waiting'
+                : 'active',
+    },
+    {
+      label: 'Booking',
+      detail: terminalBad
+        ? 'Closed'
+        : isBooked
+          ? isTripDone
+            ? 'Trip Completed'
+            : 'Booked'
+          : isApproved && isVendorAssigned
+            ? `With ${request.assigned_vendor_name || 'Vendor'}`
+            : isApproved
+              ? 'Processing'
+              : 'Queued',
+      state: terminalBad
+        ? 'muted'
+        : isBooked
+          ? 'done'
+          : isApproved
+            ? 'active'
+            : 'waiting',
+    },
+  ];
+
+  const pillTone =
+    request.status === 'REJECTED' || myRow?.status === 'REJECTED'
+      ? 'bg-danger-soft text-danger border-danger/30'
+      : request.is_cancelled || request.status === 'CANCELLED' || request.status === 'EXPIRED'
+        ? 'bg-surface-sunken text-text-muted border-border'
+        : isBooked
+          ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+          : anyAwaitingManager
+            ? 'bg-amber-500/12 text-amber-800 dark:text-amber-300 border-amber-500/30'
+            : 'bg-sky-500/12 text-sky-700 dark:text-sky-300 border-sky-500/30';
+
+  const activeInFlight = !terminalBad && !isBooked;
+
+  return (
+    <div className="mt-3 rounded-xl border border-border/80 bg-surface-sunken/40 px-4 py-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-2xs font-semibold uppercase tracking-wider text-text-subtle">
+          Travel Progress
+        </span>
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-2xs font-semibold',
+            pillTone,
+            headlineTone,
+          )}
+        >
+          {activeInFlight && (
+            <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse" />
+          )}
+          {headline}
+        </span>
+      </div>
+
+      {/* Connected horizontal step-timeline */}
+      <div className="grid grid-cols-4 items-start">
+        {steps.map((step, index) => {
+          const isLast = index === steps.length - 1;
+          const nextDone = !isLast && steps[index + 1].state === 'done';
+          const connectorFilled = step.state === 'done' && (nextDone || (!isLast && steps[index + 1].state === 'active'));
+
+          return (
+            <div key={step.label} className="relative flex flex-col items-center text-center px-1">
+              {/* Connecting line to next node */}
+              {!isLast && (
+                <div
+                  aria-hidden
+                  className={cn(
+                    'absolute top-3 left-1/2 h-0.5 w-full -translate-y-1/2 transition-colors',
+                    connectorFilled ? 'bg-emerald-500/70' : 'bg-border',
+                  )}
+                />
+              )}
+
+              {/* Step circle node */}
+              <div
+                className={cn(
+                  'relative z-10 flex h-6 w-6 items-center justify-center rounded-full border-2 text-2xs font-bold transition-all',
+                  step.state === 'done' &&
+                    'border-emerald-500 bg-emerald-500 text-white shadow-2xs',
+                  step.state === 'active' &&
+                    'border-primary bg-surface text-primary ring-4 ring-primary/15',
+                  step.state === 'rejected' &&
+                    'border-danger bg-danger text-white',
+                  step.state === 'waiting' &&
+                    'border-border bg-surface text-text-subtle',
+                  step.state === 'muted' &&
+                    'border-border/70 bg-surface-sunken text-text-subtle opacity-60',
+                )}
+              >
+                {step.state === 'done' ? (
+                  <Check size={12} strokeWidth={3} />
+                ) : step.state === 'rejected' ? (
+                  <X size={12} strokeWidth={3} />
+                ) : step.state === 'active' ? (
+                  <span className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+                ) : (
+                  <Clock size={11} />
+                )}
+              </div>
+
+              <span
+                className={cn(
+                  'mt-1.5 text-2xs font-semibold leading-tight',
+                  step.state === 'done' && 'text-text',
+                  step.state === 'active' && 'text-primary',
+                  step.state === 'rejected' && 'text-danger',
+                  (step.state === 'waiting' || step.state === 'muted') && 'text-text-muted',
+                )}
+              >
+                {step.label}
+              </span>
+              <span
+                className="mt-0.5 max-w-full truncate text-[11px] text-text-subtle"
+                title={step.detail}
+              >
+                {step.detail}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 /** Co-stay offers are not in the list response - they are only actionable on one
  *  request at a time - so an expanded row fetches the detail for them. */
@@ -152,7 +429,10 @@ export default function RequestsPage() {
 
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [tripScope, setTripScope] = useState<'ACTIVE' | 'PAST' | 'ALL'>('ACTIVE');
   const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<TravelRequest | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -248,8 +528,11 @@ export default function RequestsPage() {
         status: statusFilter || undefined,
         type: typeFilter || undefined,
         search: search.trim() || undefined,
+        sort: 'newest',
         page_size: 100,
       }),
+    refetchInterval: 10000,
+    refetchOnWindowFocus: true,
   });
 
   // The same query as the bell, so reading a notice there clears it here.
@@ -306,7 +589,24 @@ export default function RequestsPage() {
     },
   });
 
-  const rows = requests.data?.items ?? [];
+  const today = todayInIndia();
+  const rawRows: TravelRequest[] = requests.data?.items ?? [];
+  const allRows: TravelRequest[] = useMemo(
+    () =>
+      [...rawRows]
+        .filter((r) => matchesDateRange(r, dateFrom, dateTo))
+        .sort((a, b) => b.id - a.id),
+    [rawRows, dateFrom, dateTo],
+  );
+  const activeCount = allRows.filter((r: TravelRequest) => isTripActive(r, today)).length;
+  const pastCount = allRows.filter((r: TravelRequest) => !isTripActive(r, today)).length;
+
+  const rows: TravelRequest[] = allRows.filter((r: TravelRequest) => {
+    if (tripScope === 'ACTIVE') return isTripActive(r, today);
+    if (tripScope === 'PAST') return !isTripActive(r, today);
+    return true;
+  });
+
   // Unread only: an ask that has been read - or answered - is not still waiting.
   const coStayNotices = (notifications.data ?? []).filter(
     (n) => n.kind === 'COSTAY_REQUESTED' && n.read_at === null,
@@ -355,9 +655,73 @@ export default function RequestsPage() {
 
       <Card>
         <CardHeader
-          title={`${requests.data?.total ?? 0} ${
-            requests.data?.total === 1 ? 'request' : 'requests'
-          }`}
+          title={
+            tripScope === 'ACTIVE'
+              ? `Active Requests & Trips (${activeCount})`
+              : tripScope === 'PAST'
+                ? `Old Requests & Past Trips (${pastCount})`
+                : `All Requests (${allRows.length})`
+          }
+          description={
+            tripScope === 'ACTIVE'
+              ? 'Ongoing and upcoming travel, cab, and hotel requests with admin/vendor responses.'
+              : 'Trips that have ended, completed, or been cancelled.'
+          }
+          action={
+            <div className="flex rounded-lg border border-border/70 p-0.5 bg-surface-raised text-xs">
+              <button
+                type="button"
+                onClick={() => setTripScope('ACTIVE')}
+                className={tabButtonClass(tripScope === 'ACTIVE')}
+              >
+                <span>Active</span>
+                <span
+                  className={cn(
+                    'rounded-full px-1.5 py-0 text-2xs tabular-nums',
+                    tripScope === 'ACTIVE'
+                      ? 'bg-primary-fg/15 text-primary-fg'
+                      : 'bg-info-soft text-info',
+                  )}
+                >
+                  {activeCount}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTripScope('PAST')}
+                className={tabButtonClass(tripScope === 'PAST')}
+              >
+                <span>Past / Old</span>
+                <span
+                  className={cn(
+                    'rounded-full px-1.5 py-0 text-2xs tabular-nums',
+                    tripScope === 'PAST'
+                      ? 'bg-primary-fg/15 text-primary-fg'
+                      : 'bg-surface-sunken text-text-subtle',
+                  )}
+                >
+                  {pastCount}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTripScope('ALL')}
+                className={tabButtonClass(tripScope === 'ALL')}
+              >
+                <span>All</span>
+                <span
+                  className={cn(
+                    'rounded-full px-1.5 py-0 text-2xs tabular-nums',
+                    tripScope === 'ALL'
+                      ? 'bg-primary-fg/15 text-primary-fg'
+                      : 'bg-surface-sunken text-text-subtle',
+                  )}
+                >
+                  {allRows.length}
+                </span>
+              </button>
+            </div>
+          }
         />
 
         {/* The filters sit in their own row rather than in the header's action
@@ -397,6 +761,16 @@ export default function RequestsPage() {
               </option>
             ))}
           </Select>
+          <DateRangeFilter
+            from={dateFrom}
+            to={dateTo}
+            onFromChange={setDateFrom}
+            onToChange={setDateTo}
+            onClear={() => {
+              setDateFrom('');
+              setDateTo('');
+            }}
+          />
         </div>
 
         {requests.isPending ? (
@@ -415,15 +789,15 @@ export default function RequestsPage() {
           <EmptyState
             icon={<Plane size={28} />}
             title={
-              search || statusFilter || typeFilter ? 'Nothing matches that' : 'No requests yet'
+              search || statusFilter || typeFilter || dateFrom || dateTo ? 'Nothing matches that' : 'No requests yet'
             }
             description={
-              search || statusFilter || typeFilter
+              search || statusFilter || typeFilter || dateFrom || dateTo
                 ? 'Try a different search or filter.'
                 : 'Raise one for a flight, train, bus, local cab or hotel stay.'
             }
             action={
-              !search && !statusFilter && !typeFilter ? (
+              !search && !statusFilter && !typeFilter && !dateFrom && !dateTo ? (
                 <Button
                   onClick={() => {
                     setEditing(null);
@@ -535,6 +909,108 @@ export default function RequestsPage() {
                       <div className="mt-2">
                         <CancellationNote request={request} />
                       </div>
+
+                      {/* Visual Approval & Booking Pipeline Status */}
+                      <TravelStatusPipeline request={request} myRow={myRow} />
+
+                      {/* Prominent Admin / Vendor Response Card */}
+                      {(request.cab_driver_name ||
+                        request.cab_vehicle_number ||
+                        request.assigned_vendor_name ||
+                        (request.request_type === 'HOTEL' && request.status === 'BOOKED') ||
+                        request.travellers.some((t) => t.booking_reference)) && (
+                        <div className="mt-2.5 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-2xs font-bold uppercase tracking-wider text-primary flex items-center gap-1">
+                              <CheckCircle2 size={12} />
+                              {request.request_type === 'LOCAL_CAB'
+                                ? 'Admin / Vendor Cab Dispatch Response'
+                                : request.request_type === 'HOTEL'
+                                  ? 'Hotel Booking & Vendor Confirmation'
+                                  : 'Confirmed Booking Response'}
+                            </span>
+                            {request.assigned_vendor_name && (
+                              <span className="text-2xs text-text-subtle font-medium">
+                                Vendor: <strong>{request.assigned_vendor_name}</strong>
+                              </span>
+                            )}
+                          </div>
+
+                          {request.request_type === 'LOCAL_CAB' &&
+                            (request.cab_driver_name || request.cab_vehicle_number) && (
+                              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                                {request.cab_driver_name && (
+                                  <div>
+                                    <span className="text-text-muted">Driver: </span>
+                                    <strong className="text-text">{request.cab_driver_name}</strong>
+                                    {request.cab_driver_phone && (
+                                      <a
+                                        href={`tel:${request.cab_driver_phone}`}
+                                        className="ml-1 text-primary underline font-medium"
+                                      >
+                                        ({request.cab_driver_phone})
+                                      </a>
+                                    )}
+                                  </div>
+                                )}
+                                {request.cab_vehicle_number && (
+                                  <div>
+                                    <span className="text-text-muted">Vehicle: </span>
+                                    <strong className="text-text font-mono uppercase">
+                                      {request.cab_vehicle_number}
+                                    </strong>
+                                    {request.booked_cab_type && (
+                                      <span className="ml-1 text-text-subtle">
+                                        ({request.booked_cab_type})
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                          {request.request_type === 'HOTEL' && (
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                              <div>
+                                <span className="text-text-muted">Location: </span>
+                                <strong className="text-text">{request.hotel_city}</strong>
+                              </div>
+                              <div>
+                                <span className="text-text-muted">Check-In: </span>
+                                <strong className="text-text">{request.check_in}</strong>
+                                <span className="text-text-muted ml-1">to</span>
+                                <strong className="text-text ml-1">{request.check_out}</strong>
+                              </div>
+                              {request.travellers.some((t) => t.booking_reference) && (
+                                <div>
+                                  <span className="text-text-muted">Hotel Voucher / Ref: </span>
+                                  <strong className="text-emerald-600 font-mono">
+                                    {request.travellers
+                                      .map((t) => t.booking_reference)
+                                      .filter(Boolean)
+                                      .join(', ')}
+                                  </strong>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {request.request_type === 'LONG_DISTANCE' &&
+                            request.travellers.some((t) => t.booking_reference) && (
+                              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                                <div>
+                                  <span className="text-text-muted">PNR / Ticket Ref: </span>
+                                  <strong className="text-emerald-600 font-mono">
+                                    {request.travellers
+                                      .map((t) => t.booking_reference)
+                                      .filter(Boolean)
+                                      .join(', ')}
+                                  </strong>
+                                </div>
+                              </div>
+                            )}
+                        </div>
+                      )}
 
                     </div>
 
@@ -736,6 +1212,35 @@ export default function RequestsPage() {
                         </div>
                       </div>
                     )}
+
+                  {open && request.request_type === 'HOTEL' && (
+                    <>
+                      <HotelProposalsCard
+                        requestId={request.id}
+                        requestStatus={request.status}
+                        requesterId={request.requester_id}
+                        onUpdated={refresh}
+                      />
+                      <HotelStayVerificationCard
+                        requestId={request.id}
+                        requestStatus={request.status}
+                        hotelCity={request.hotel_city}
+                        onUpdated={refresh}
+                      />
+                    </>
+                  )}
+
+                  {open && (request.request_type === 'LOCAL_CAB' || request.mode === 'CAB') && (
+                    <CabTelemetryCard
+                      requestId={request.id}
+                      requestStatus={request.status}
+                      cabTrip={request.cab_trip}
+                      assignedDriverName={request.cab_driver_name}
+                      assignedDriverPhone={request.cab_driver_phone}
+                      assignedVehicleNumber={request.cab_vehicle_number}
+                      onUpdated={refresh}
+                    />
+                  )}
 
                   {open && (
                     <div className="mt-3 rounded-md border border-border bg-surface-sunken px-3 py-3">

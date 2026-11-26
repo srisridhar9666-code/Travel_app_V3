@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from app.core import clock
-from app.core.enums import Designation, TeamChangeKind, TeamChangeStatus, UserStatus
+from app.core.enums import Designation, HotelOccupancy, TeamChangeKind, TeamChangeStatus, UserStatus
 from app.schemas.auth import InviteLinkResponse
 from app.schemas.common import UTCInstant
 from app.schemas.user import MobileNumber, PersonName, SelectableGender, WorkEmail
@@ -40,6 +40,7 @@ class TeamAddRequest(_Noted):
     employee_code: str | None = Field(default=None, max_length=40)
     base_state: str | None = Field(default=None, max_length=80)
     base_location: str | None = Field(default=None, max_length=120)
+    hotel_occupancy_entitlement: HotelOccupancy = HotelOccupancy.SINGLE
 
 
 #: What a manager may ask to change about a member. Role, department, email and
@@ -51,6 +52,7 @@ EDITABLE_FIELDS = (
     "employee_code",
     "base_state",
     "base_location",
+    "hotel_occupancy_entitlement",
 )
 
 
@@ -63,6 +65,12 @@ class TeamEditRequest(_Noted):
     employee_code: str | None = Field(default=None, max_length=40)
     base_state: str | None = Field(default=None, max_length=80)
     base_location: str | None = Field(default=None, max_length=120)
+    hotel_occupancy_entitlement: HotelOccupancy | None = None
+
+
+class TeamMemberOccupancyUpdate(BaseModel):
+    """Direct occupancy evaluation by manager for their team member (SOW Section 1.1 item 2)."""
+    hotel_occupancy_entitlement: HotelOccupancy
 
 
 class TeamRemoveRequest(_Noted):

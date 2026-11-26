@@ -8,7 +8,7 @@ from typing import Annotated
 from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core import clock
-from app.core.enums import SELECTABLE_GENDERS, Designation, Gender, Role, UserStatus
+from app.core.enums import SELECTABLE_GENDERS, Designation, Gender, HotelOccupancy, Role, UserStatus
 from app.schemas.common import UTCInstant
 
 _PHONE_CHARS = re.compile(r"\+?[\d\s\-()]+")
@@ -103,6 +103,10 @@ class UserCreate(BaseModel):
     department_id: int | None = None
     #: The manager they report to. Ground staff only, and only a MANAGER.
     manager_id: int | None = None
+    #: If this user is an external commercial partner (Role.VENDOR), linked vendor company.
+    vendor_id: int | None = None
+    #: Default hotel room occupancy entitlement: Single or Double (evaluated by Manager).
+    hotel_occupancy_entitlement: HotelOccupancy = HotelOccupancy.SINGLE
     #: Email the invitation link to them. Either way the link comes back in the
     #: response, for the admin to copy and share themselves.
     send_email: bool = True
@@ -140,6 +144,13 @@ class UserUpdate(BaseModel):
     base_location: str | None = Field(default=None, max_length=120)
     department_id: int | None = None
     manager_id: int | None = None
+    vendor_id: int | None = None
+    hotel_occupancy_entitlement: HotelOccupancy | None = None
+    upi_id: str | None = None
+    bank_name: str | None = None
+    bank_account_number: str | None = None
+    account_holder_name: str | None = None
+    ifsc_code: str | None = None
 
     @field_validator(*_NOT_NULL, mode="before")
     @classmethod
@@ -199,6 +210,14 @@ class UserRead(BaseModel):
     #: Who they report to, for ground staff in a team.
     manager_id: int | None = None
     manager_name: str | None = None
+    vendor_id: int | None = None
+    vendor_name: str | None = None
+    hotel_occupancy_entitlement: HotelOccupancy = HotelOccupancy.SINGLE
+    upi_id: str | None = None
+    bank_name: str | None = None
+    bank_account_number: str | None = None
+    account_holder_name: str | None = None
+    ifsc_code: str | None = None
     status: UserStatus
     status_changed_at: UTCInstant | None = None
     #: Mirrors status == ACTIVE.

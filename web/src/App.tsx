@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import AppShell from '@/components/AppShell';
 import { Spinner } from '@/components/ui';
 import AuditPage from '@/pages/AuditPage';
+import BugReportsPage from '@/pages/BugReportsPage';
 import DashboardPage from '@/pages/DashboardPage';
 import DepartmentsPage from '@/pages/DepartmentsPage';
 import LoginPage from '@/pages/LoginPage';
@@ -18,15 +19,19 @@ import MyTeamPage from '@/pages/MyTeamPage';
 import TeamApprovalsPage from '@/pages/TeamApprovalsPage';
 import TeamPage from '@/pages/TeamPage';
 import TravelLogsPage from '@/pages/TravelLogsPage';
+import ExpensesPage from '@/pages/ExpensesPage';
 import InvoiceDetailPage from '@/pages/InvoiceDetailPage';
 import InvoiceEditorPage from '@/pages/InvoiceEditorPage';
 import InvoicePrintPage from '@/pages/InvoicePrintPage';
 import InvoicesPage from '@/pages/InvoicesPage';
 import VendorsPage from '@/pages/VendorsPage';
 import { useAuth, useHasHydrated } from '@/store/auth';
-import { ADMIN_ROLES, INVOICE_EDITOR_ROLES, type Role } from '@/types';
+import { ADMIN_ROLES, type Role } from '@/types';
 
 const ADMINS_AND_MANAGERS: Role[] = [...ADMIN_ROLES, 'MANAGER'];
+const ADMINS_AND_FINANCE: Role[] = [...ADMIN_ROLES, 'FINANCE'];
+const ADMINS_AND_VENDORS: Role[] = [...ADMIN_ROLES, 'VENDOR'];
+const INVOICE_ROLES: Role[] = [...ADMIN_ROLES, 'FINANCE', 'VENDOR'];
 
 function RequireAuth({ roles, children }: { roles?: Role[]; children: ReactNode }) {
   const location = useLocation();
@@ -66,7 +71,7 @@ export default function App() {
         <Route
           path="/invoices/:id/print"
           element={
-            <RequireAuth roles={ADMIN_ROLES}>
+            <RequireAuth roles={ADMINS_AND_FINANCE}>
               <InvoicePrintPage />
             </RequireAuth>
           }
@@ -81,12 +86,13 @@ export default function App() {
         >
           <Route index element={<DashboardPage />} />
           <Route path="requests" element={<RequestsPage />} />
+          <Route path="expenses" element={<ExpensesPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route
             path="approvals"
             element={
-              <RequireAuth roles={ADMIN_ROLES}>
+              <RequireAuth roles={ADMINS_AND_VENDORS}>
                 <ApprovalsPage />
               </RequireAuth>
             }
@@ -94,7 +100,7 @@ export default function App() {
           <Route
             path="travel-logs"
             element={
-              <RequireAuth roles={ADMIN_ROLES}>
+              <RequireAuth roles={ADMINS_AND_FINANCE}>
                 <TravelLogsPage />
               </RequireAuth>
             }
@@ -102,7 +108,7 @@ export default function App() {
           <Route
             path="analytics"
             element={
-              <RequireAuth roles={ADMIN_ROLES}>
+              <RequireAuth roles={ADMINS_AND_FINANCE}>
                 <AnalyticsPage />
               </RequireAuth>
             }
@@ -126,7 +132,7 @@ export default function App() {
           <Route
             path="team-approvals"
             element={
-              <RequireAuth roles={['MANAGER']}>
+              <RequireAuth roles={ADMINS_AND_MANAGERS}>
                 <TeamApprovalsPage />
               </RequireAuth>
             }
@@ -134,7 +140,7 @@ export default function App() {
           <Route
             path="my-team"
             element={
-              <RequireAuth roles={['MANAGER']}>
+              <RequireAuth roles={ADMINS_AND_MANAGERS}>
                 <MyTeamPage />
               </RequireAuth>
             }
@@ -158,7 +164,7 @@ export default function App() {
           <Route
             path="invoices"
             element={
-              <RequireAuth roles={ADMIN_ROLES}>
+              <RequireAuth roles={INVOICE_ROLES}>
                 <InvoicesPage />
               </RequireAuth>
             }
@@ -166,7 +172,7 @@ export default function App() {
           <Route
             path="invoices/new"
             element={
-              <RequireAuth roles={INVOICE_EDITOR_ROLES}>
+              <RequireAuth roles={INVOICE_ROLES}>
                 <InvoiceEditorPage />
               </RequireAuth>
             }
@@ -174,7 +180,7 @@ export default function App() {
           <Route
             path="invoices/:id"
             element={
-              <RequireAuth roles={ADMIN_ROLES}>
+              <RequireAuth roles={INVOICE_ROLES}>
                 <InvoiceDetailPage />
               </RequireAuth>
             }
@@ -182,7 +188,7 @@ export default function App() {
           <Route
             path="invoices/:id/edit"
             element={
-              <RequireAuth roles={INVOICE_EDITOR_ROLES}>
+              <RequireAuth roles={INVOICE_ROLES}>
                 <InvoiceEditorPage />
               </RequireAuth>
             }
@@ -192,6 +198,14 @@ export default function App() {
             element={
               <RequireAuth roles={ADMIN_ROLES}>
                 <AuditPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="bug-reports"
+            element={
+              <RequireAuth roles={ADMIN_ROLES}>
+                <BugReportsPage />
               </RequireAuth>
             }
           />

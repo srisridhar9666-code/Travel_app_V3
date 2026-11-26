@@ -27,6 +27,7 @@ import { PlacePicker } from '@/components/PlacePicker';
 import { TravelHistoryPanel } from '@/components/TravelHistoryPanel';
 import { Modal } from '@/components/Modal';
 import { TeamChangesPanel } from '@/components/TeamChangesPanel';
+import { useVendors } from '@/components/VendorSelect';
 import {
   Badge,
   Button,
@@ -48,6 +49,7 @@ import {
   reinviteUser,
   runRetentionPurge,
   unlockUser,
+  unlockUserTelemetry,
   updateUser,
   type UserPayload,
   type UserUpdatePayload,
@@ -84,6 +86,8 @@ const BLANK: UserPayload = {
   base_location: '',
   department_id: null,
   manager_id: null,
+  vendor_id: null,
+  hotel_occupancy_entitlement: 'DOUBLE',
   send_email: true,
 };
 
@@ -99,6 +103,8 @@ interface EditForm {
   base_location: string;
   department_id: number | null;
   manager_id: number | null;
+  vendor_id: number | null;
+  hotel_occupancy_entitlement: 'SINGLE' | 'DOUBLE';
 }
 
 const GENDER_REQUIRED = 'Choose Male or Female.';
@@ -277,6 +283,7 @@ export default function TeamPage() {
     queryFn: () => fetchUsers({ role: 'MANAGER', status: 'ACTIVE', page_size: 200 }),
   });
   const managerOptions = managers.data?.items ?? [];
+  const vendors = useVendors();
 
   const departments = useQuery({ queryKey: ['departments'], queryFn: fetchDepartments });
   const retention = useQuery({ queryKey: ['retention'], queryFn: fetchRetentionStatus });
@@ -289,6 +296,17 @@ export default function TeamPage() {
     queryClient.invalidateQueries({ queryKey: ['filter-options'] });
   };
 
+  const unlockTelemetry = useMutation({
+    mutationFn: (userId: number) => unlockUserTelemetry(userId),
+    onSuccess: (res) => {
+      toast.success(res.message);
+      refresh();
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.detail || 'Failed to unlock employee');
+    },
+  });
+
   const invite = useMutation({
     mutationFn: () =>
       createUser({
@@ -299,6 +317,7 @@ export default function TeamPage() {
         base_state: form.base_state || null,
         base_location: form.base_location || null,
         manager_id: form.role === 'GROUND_STAFF' ? (form.manager_id ?? null) : null,
+        vendor_id: form.role === 'VENDOR' ? (form.vendor_id ?? null) : null,
       }),
     meta: { errorFallback: 'Could not create this account.' },
     onSuccess: (result) => {
@@ -328,6 +347,8 @@ export default function TeamPage() {
         base_location: editForm!.base_location || null,
         department_id: editForm!.department_id,
         manager_id: editForm!.role === 'GROUND_STAFF' ? editForm!.manager_id : null,
+        vendor_id: editForm!.role === 'VENDOR' ? editForm!.vendor_id : null,
+        hotel_occupancy_entitlement: editForm!.hotel_occupancy_entitlement,
       };
       // Sent only when it changed: the server tells the old address, and
       // refuses a change to your own (that needs your password, on My profile).
@@ -406,6 +427,9 @@ export default function TeamPage() {
       base_location: user.base_location ?? '',
       department_id: user.department_id,
       manager_id: user.manager_id,
+      vendor_id: user.vendor_id ?? null,
+      hotel_occupancy_entitlement:
+        (user.hotel_occupancy_entitlement as 'SINGLE' | 'DOUBLE') || 'DOUBLE',
     });
     setEditError(null);
   };
@@ -603,6 +627,12 @@ export default function TeamPage() {
                               Gender not set
                             </Badge>
                           )}
+                          <Badge
+                            tone={user.hotel_occupancy_entitlement === 'SINGLE' ? 'info' : 'neutral'}
+                            className="ml-1.5 align-middle text-2xs"
+                          >
+                            {user.hotel_occupancy_entitlement === 'SINGLE' ? 'Single Room' : 'Double Room'}
+                          </Badge>
                         </div>
                         <div className="text-xs text-text-muted">{user.email}</div>
                       </td>
@@ -610,6 +640,9 @@ export default function TeamPage() {
                         {ROLE_LABELS[user.role]}
                         {user.manager_name && (
                           <div className="text-xs text-text-subtle">Reports to {user.manager_name}</div>
+                        )}
+                        {user.role === 'VENDOR' && user.vendor_name && (
+                          <div className="text-xs text-primary font-medium">Company: {user.vendor_name}</div>
                         )}
                       </td>
                       <td className="hidden px-5 py-3 text-text-muted md:table-cell">
@@ -656,11 +689,22 @@ export default function TeamPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              title="Unlock"
+                              title="Unlock account"
                               loading={unlock.isPending && unlock.variables?.id === user.id}
                               onClick={() => unlock.mutate(user)}
                             >
                               <LockOpen size={14} />
+                            </Button>
+                          )}
+                          {manageable && user.status === 'ACTIVE' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Unlock booking restriction / missed photos lock"
+                              loading={unlockTelemetry.isPending && unlockTelemetry.variables === user.id}
+                              onClick={() => unlockTelemetry.mutate(user.id)}
+                            >
+                              <ShieldAlert size={14} className="text-warning" />
                             </Button>
                           )}
                           {manageable && user.status === 'ACTIVE' && (
@@ -840,6 +884,28 @@ export default function TeamPage() {
                 </Field>
               )}
 
+              {editForm.role === 'VENDOR' && (
+                <Field label="Vendor Company" htmlFor="edit_vendor" required className="sm:col-span-2">
+                  <Select
+                    id="edit_vendor"
+                    value={editForm.vendor_id ?? ''}
+                    onChange={(e) =>
+                      setEditForm({
+                        ...editForm,
+                        vendor_id: e.target.value ? Number(e.target.value) : null,
+                      })
+                    }
+                  >
+                    <option value="">Select Vendor Company...</option>
+                    {(vendors.data ?? []).map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} ({v.kind})
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
+
               <Field label="Designation" htmlFor="edit_designation">
                 <Select
                   id="edit_designation"
@@ -924,6 +990,26 @@ export default function TeamPage() {
                   value={editForm.employee_code}
                   onChange={(e) => setEditForm({ ...editForm, employee_code: e.target.value })}
                 />
+              </Field>
+
+              <Field
+                label="Hotel Room Occupancy Entitlement"
+                htmlFor="edit_occupancy"
+                hint="Controls whether employee gets a single room or double sharing."
+              >
+                <Select
+                  id="edit_occupancy"
+                  value={editForm.hotel_occupancy_entitlement || 'DOUBLE'}
+                  onChange={(e) =>
+                    setEditForm({
+                      ...editForm,
+                      hotel_occupancy_entitlement: e.target.value as 'SINGLE' | 'DOUBLE',
+                    })
+                  }
+                >
+                  <option value="DOUBLE">Double Sharing Room (Default)</option>
+                  <option value="SINGLE">Single Occupancy Room</option>
+                </Select>
               </Field>
             </div>
 
@@ -1041,8 +1127,37 @@ export default function TeamPage() {
                   id="manager"
                   value={form.manager_id ?? null}
                   managers={managerOptions}
-                  onChange={(manager_id) => setForm({ ...form, manager_id })}
+                  onChange={(manager_id) => {
+                    const selMgr = managerOptions.find((m) => m.id === manager_id);
+                    setForm((prev) => ({
+                      ...prev,
+                      manager_id,
+                      department_id: selMgr?.department_id ?? prev.department_id,
+                    }));
+                  }}
                 />
+              </Field>
+            )}
+
+            {form.role === 'VENDOR' && (
+              <Field label="Vendor Company" htmlFor="new_vendor" required className="sm:col-span-2">
+                <Select
+                  id="new_vendor"
+                  value={form.vendor_id ?? ''}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      vendor_id: e.target.value ? Number(e.target.value) : null,
+                    }))
+                  }
+                >
+                  <option value="">Select Vendor Company...</option>
+                  {(vendors.data ?? []).map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name} ({v.kind})
+                    </option>
+                  ))}
+                </Select>
               </Field>
             )}
 
@@ -1125,6 +1240,26 @@ export default function TeamPage() {
                 onChange={(e) => setForm({ ...form, employee_code: e.target.value })}
                 placeholder="DB-1042"
               />
+            </Field>
+
+            <Field
+              label="Hotel Room Occupancy Entitlement"
+              htmlFor="occupancy"
+              hint="Controls whether employee gets a single room or double sharing."
+            >
+              <Select
+                id="occupancy"
+                value={form.hotel_occupancy_entitlement || 'DOUBLE'}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    hotel_occupancy_entitlement: e.target.value as 'SINGLE' | 'DOUBLE',
+                  })
+                }
+              >
+                <option value="DOUBLE">Double Sharing Room (Default)</option>
+                <option value="SINGLE">Single Occupancy Room</option>
+              </Select>
             </Field>
           </div>
 

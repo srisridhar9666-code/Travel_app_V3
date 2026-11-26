@@ -64,15 +64,27 @@ Button.displayName = 'Button';
 /* ------------------------------------------------------------------------- */
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
-  ({ className, ...props }, ref) => (
+  ({ className, type, onClick, ...props }, ref) => (
     <input
       ref={ref}
+      type={type}
+      onClick={(e) => {
+        if (type === 'date' || type === 'datetime-local' || type === 'time') {
+          try {
+            e.currentTarget.showPicker?.();
+          } catch {
+            // Ignore if already open or unsupported
+          }
+        }
+        onClick?.(e);
+      }}
       className={cn(
         // 16px below sm: iOS zooms the page into any input smaller than that.
         'h-10 w-full rounded-md border border-border bg-surface px-3 text-base text-text shadow-sm transition-colors sm:text-sm',
         'placeholder:text-text-subtle hover:border-border-strong focus:border-border-strong',
         'disabled:cursor-not-allowed disabled:opacity-60',
         'aria-[invalid=true]:border-danger',
+        (type === 'date' || type === 'datetime-local' || type === 'time') && 'cursor-pointer',
         className,
       )}
       {...props}
@@ -129,7 +141,7 @@ export function Field({ label, htmlFor, hint, error, required, children, classNa
 
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <div className={cn('rounded-xl border border-border bg-surface shadow-sm', className)}>
+    <div className={cn('rounded-xl border border-border bg-surface shadow-sm ring-1 ring-black/[0.02] dark:ring-white/[0.03]', className)}>
       {children}
     </div>
   );
@@ -280,7 +292,7 @@ export function ItemCard({
   return (
     <li
       className={cn(
-        'rounded-lg border border-l-4 border-border bg-surface px-4 py-3.5 shadow-sm sm:px-5',
+        'rounded-lg border border-l-4 border-border bg-surface px-4 py-3.5 shadow-sm transition-[box-shadow,border-color] duration-150 hover:shadow-md sm:px-5',
         ACCENT_EDGE[accent],
         className,
       )}
@@ -310,3 +322,74 @@ export function ItemNumber({ value, className }: { value: number | string; class
  *  <tbody>. */
 export const ZEBRA_ROWS =
   '[&>tr:nth-child(even)]:bg-surface-sunken [&>tr:hover]:!bg-brand-soft/70';
+
+/** High-contrast tab styling shared across all segmented pill & underline tabs. */
+export function tabButtonClass(active: boolean, variant: 'pill' | 'underline' = 'pill'): string {
+  if (variant === 'underline') {
+    return cn(
+      '-mb-px flex items-center gap-1.5 border-b-2 rounded-t-md px-3.5 py-2 text-xs transition-all',
+      active
+        ? 'border-primary bg-primary/10 font-semibold text-primary'
+        : 'border-transparent font-medium text-text-muted hover:bg-surface-sunken/70 hover:text-text',
+    );
+  }
+  return cn(
+    'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-all',
+    active
+      ? 'bg-primary text-primary-fg shadow-sm font-semibold'
+      : 'font-medium text-text-muted hover:bg-surface-sunken hover:text-text',
+  );
+}
+
+/** Compact From / To date range filter shared across queue, request, and expense views. */
+export function DateRangeFilter({
+  from,
+  to,
+  onFromChange,
+  onToChange,
+  onClear,
+  className,
+}: {
+  from: string;
+  to: string;
+  onFromChange: (value: string) => void;
+  onToChange: (value: string) => void;
+  onClear: () => void;
+  className?: string;
+}) {
+  return (
+    <div className={cn('flex flex-wrap items-center gap-1.5', className)}>
+      <label className="flex items-center gap-1 text-2xs font-medium text-text-muted">
+        <span>From</span>
+        <Input
+          type="date"
+          value={from}
+          onChange={(e) => onFromChange(e.target.value)}
+          aria-label="Filter from date"
+          className="h-9 w-36 px-2 text-xs"
+        />
+      </label>
+      <label className="flex items-center gap-1 text-2xs font-medium text-text-muted">
+        <span>To</span>
+        <Input
+          type="date"
+          value={to}
+          onChange={(e) => onToChange(e.target.value)}
+          aria-label="Filter to date"
+          className="h-9 w-36 px-2 text-xs"
+        />
+      </label>
+      {(from || to) && (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={onClear}
+          className="h-8 px-2 text-2xs text-text-muted hover:text-text"
+        >
+          Clear dates
+        </Button>
+      )}
+    </div>
+  );
+}

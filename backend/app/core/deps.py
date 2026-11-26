@@ -15,7 +15,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.core.enums import ACCOUNT_ROLES, ADMIN_ROLES, Role
+from app.core.enums import ACCOUNT_ROLES, ADMIN_ROLES, FINANCE_ROLES, VENDOR_ROLES, Role
 from app.core.security import decode_access_token
 from app.database import get_db
 from app.models.user import User
@@ -108,18 +108,28 @@ def require_roles(*allowed: Role):
 
 require_admin = require_roles(*ADMIN_ROLES)
 require_system_admin = require_roles(*ACCOUNT_ROLES)
-require_super_admin = require_roles(Role.SUPER_ADMIN)
+require_super_admin = require_roles(Role.SUPER_ADMIN, Role.SYSTEM_ADMIN)
 require_manager = require_roles(Role.MANAGER)
+require_finance = require_roles(*FINANCE_ROLES)
+require_vendor = require_roles(*VENDOR_ROLES)
 #: Admins, and managers for their own work: campaigns, their team.
 require_admin_or_manager = require_roles(*ADMIN_ROLES, Role.MANAGER)
+#: Admins and finance for reimbursements, invoices, settlements.
+require_finance_or_admin = require_roles(*FINANCE_ROLES, *ADMIN_ROLES)
 #: Who prepares vendor invoices and keeps the vendor list: admins and system
 #: admins. Not the super admin, on purpose - they approve invoices, and the
 #: person who approves a bill must not be the one who wrote it.
-require_invoice_editor = require_roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+require_invoice_editor = require_roles(*ADMIN_ROLES, Role.FINANCE, Role.VENDOR)
+#: Desk operations for reviewing/dispatching/fulfilling requests (Admin, Manager, Vendor)
+require_ops_desk = require_roles(*ADMIN_ROLES, Role.MANAGER, Role.VENDOR)
 
 AdminUser = Annotated[User, Depends(require_admin)]
 SystemAdminUser = Annotated[User, Depends(require_system_admin)]
 SuperAdminUser = Annotated[User, Depends(require_super_admin)]
 ManagerUser = Annotated[User, Depends(require_manager)]
+FinanceUser = Annotated[User, Depends(require_finance)]
+VendorUser = Annotated[User, Depends(require_vendor)]
 AdminOrManager = Annotated[User, Depends(require_admin_or_manager)]
+FinanceOrAdmin = Annotated[User, Depends(require_finance_or_admin)]
 InvoiceEditor = Annotated[User, Depends(require_invoice_editor)]
+OpsDeskUser = Annotated[User, Depends(require_ops_desk)]

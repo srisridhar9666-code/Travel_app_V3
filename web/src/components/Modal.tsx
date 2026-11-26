@@ -12,12 +12,13 @@ interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   className?: string;
+  closeOnBackdropClick?: boolean;
 }
 
 /**
- * A small dialog built on the native <dialog>-free path: a portal plus a focus
- * trap good enough for forms. Escape and backdrop both close it, and focus
- * returns to whatever opened it.
+ * A dialog built on the native portal path plus a focus trap for forms.
+ * Clicking outside (backdrop) does not close it by default, preventing accidental
+ * data loss while filling forms. It closes only via the X button or Cancel action.
  */
 export function Modal({
   open,
@@ -27,6 +28,7 @@ export function Modal({
   children,
   footer,
   className,
+  closeOnBackdropClick = false,
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -97,7 +99,7 @@ export function Modal({
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       <div
         className="absolute inset-0 animate-fade-in bg-black/50 backdrop-blur-sm"
-        onClick={onClose}
+        onClick={closeOnBackdropClick ? onClose : undefined}
         aria-hidden
       />
       <div

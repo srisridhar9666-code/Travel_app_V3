@@ -11,7 +11,7 @@ from datetime import date, datetime
 from sqlalchemy import Boolean, Date, Enum as SAEnum, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
-from app.core.enums import ADMIN_ROLES, Designation, Gender, Role, UserStatus
+from app.core.enums import ADMIN_ROLES, Designation, Gender, HotelOccupancy, Role, UserStatus
 from app.database import Base
 from app.models.base import TenantMixin, TimestampMixin, UTCDateTime
 
@@ -58,7 +58,20 @@ class User(Base, TenantMixin, TimestampMixin):
         default=Gender.UNDISCLOSED,
         nullable=False,
     )
+    #: Default hotel room occupancy entitlement: Single (default) or Double (SOW Section 1.1 item 2).
+    #: Evaluated & configured on the team member's profile by their Manager for all their bookings.
+    hotel_occupancy_entitlement: Mapped[HotelOccupancy] = mapped_column(
+        SAEnum(HotelOccupancy, native_enum=False, length=20, validate_strings=True),
+        default=HotelOccupancy.SINGLE,
+        server_default=HotelOccupancy.SINGLE.value,
+        nullable=False,
+    )
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    upi_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    bank_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    bank_account_number: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    account_holder_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    ifsc_code: Mapped[str | None] = mapped_column(String(30), nullable=True)
     #: Where they are based: a state and a city or constituency from the place
     #: list, like a request's origin. `base_location` is the city; it predates
     #: `base_state` and may still hold free text on older rows.
@@ -79,6 +92,15 @@ class User(Base, TenantMixin, TimestampMixin):
         nullable=True,
         index=True,
     )
+
+    #: If this user is an external commercial partner / vendor (Role.VENDOR),
+    #: links to the Vendor master row (SOW Section 1.1).
+    vendor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vendors.id", ondelete="SET NULL", name="fk_users_vendor_id"),
+        nullable=True,
+        index=True,
+    )
+    vendor = relationship("Vendor", foreign_keys=[vendor_id], lazy="joined")
 
     # --- preferences --------------------------------------------------------
     # Persisted server-side so the theme follows the user across devices,
@@ -113,6 +135,9 @@ class User(Base, TenantMixin, TimestampMixin):
     #: changing or resetting a password signs out every other device.
     password_changed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
+    #: When an Admin or Manager unlocks an employee who exceeded missed telemetry limits
+    telemetry_unlocked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
     created_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -138,6 +163,10 @@ class User(Base, TenantMixin, TimestampMixin):
         return self.manager.full_name if self.manager is not None else None
 
     @property
+    def vendor_name(self) -> str | None:
+        return self.vendor.name if self.vendor is not None else None
+
+    @property
     def active_manager(self) -> "User | None":
         """The manager who answers for this person's trips right now.
 
@@ -155,6 +184,14 @@ class User(Base, TenantMixin, TimestampMixin):
     @property
     def is_manager(self) -> bool:
         return self.role is Role.MANAGER
+
+    @property
+    def is_finance(self) -> bool:
+        return self.role in {Role.FINANCE, Role.ADMIN, Role.SYSTEM_ADMIN, Role.SUPER_ADMIN}
+
+    @property
+    def is_vendor(self) -> bool:
+        return self.role is Role.VENDOR
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<User {self.id} {self.email} {self.role}>"

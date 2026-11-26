@@ -34,6 +34,9 @@ export interface RequestTripHighlightProps {
     | 'check_in'
     | 'check_out'
     | 'cab_type'
+    | 'hotel_occupancy'
+    | 'city_tier'
+    | 'lodging_limit_per_night'
   >;
   variant?: 'inline' | 'banner';
   className?: string;
@@ -165,22 +168,35 @@ export function RequestTripHighlight({
           {/* Date & Time pill */}
           <div className="flex flex-wrap items-center gap-2">
             {isHotel ? (
-              request.check_in ? (
-                <span
-                  className="inline-flex items-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-xs font-semibold text-purple-900 dark:text-purple-200"
-                  title="Check-in and Check-out booking dates"
-                >
-                  <CalendarClock size={14} className="text-purple-600 dark:text-purple-400 shrink-0" />
-                  <span>
-                    Check-in: {stayDates({ check_in: request.check_in, check_out: request.check_out })}
-                  </span>
-                  {hotelNights > 0 && (
-                    <span className="ml-1 rounded bg-purple-600/15 px-1.5 py-0.2 text-2xs font-bold">
-                      {hotelNights} {hotelNights === 1 ? 'night' : 'nights'}
+              <>
+                {request.check_in ? (
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-xs font-semibold text-purple-900 dark:text-purple-200"
+                    title="Check-in and Check-out booking dates"
+                  >
+                    <CalendarClock size={14} className="text-purple-600 dark:text-purple-400 shrink-0" />
+                    <span>
+                      Check-in: {stayDates({ check_in: request.check_in, check_out: request.check_out })}
                     </span>
-                  )}
-                </span>
-              ) : null
+                    {hotelNights > 0 && (
+                      <span className="ml-1 rounded bg-purple-600/15 px-1.5 py-0.2 text-2xs font-bold">
+                        {hotelNights} {hotelNights === 1 ? 'night' : 'nights'}
+                      </span>
+                    )}
+                  </span>
+                ) : null}
+                {request.hotel_occupancy && (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-2 py-0.5 text-xs font-semibold text-indigo-900 dark:text-indigo-200">
+                    {request.hotel_occupancy} Occupancy
+                    {request.lodging_limit_per_night ? ` · ₹${request.lodging_limit_per_night}/nt max` : ''}
+                  </span>
+                )}
+                {request.city_tier && (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-xs font-semibold text-violet-900 dark:text-violet-200">
+                    {request.city_tier === 'CATEGORY_A' ? 'Cat A (Metro)' : request.city_tier === 'CATEGORY_B' ? 'Cat B (Tier 2)' : 'Cat C'}
+                  </span>
+                )}
+              </>
             ) : request.start_at ? (
               <div className="flex flex-wrap items-center gap-1.5">
                 <span
@@ -192,7 +208,11 @@ export function RequestTripHighlight({
                 </span>
                 {request.end_at && (
                   <span className="inline-flex items-center gap-1 text-xs text-text-muted">
-                    <span>return</span>
+                    <span>
+                      {request.request_type === 'LOCAL_CAB' || request.mode === 'CAB'
+                        ? 'drop-off'
+                        : 'arrives'}
+                    </span>
                     <span className="rounded bg-surface px-1.5 py-0.5 font-medium text-text border border-border">
                       {dayTime(request.end_at)}
                     </span>
@@ -208,7 +228,7 @@ export function RequestTripHighlight({
 
   // Inline variant for queue cards and lists
   return (
-    <div className={cn('inline-flex flex-wrap items-center gap-2', className)}>
+    <div className={cn('inline-flex flex-wrap items-center gap-x-2 gap-y-1.5 leading-snug', className)}>
       {/* Mode badge */}
       <span
         className={cn(
@@ -239,29 +259,54 @@ export function RequestTripHighlight({
 
       {/* Booking Date & Time badge */}
       {isHotel ? (
-        request.check_in ? (
-          <span
-            className="inline-flex items-center gap-1 rounded-md border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-xs font-semibold text-purple-900 dark:text-purple-200"
-            title="Hotel booking dates"
-          >
-            <CalendarClock size={12} className="text-purple-600 dark:text-purple-400 shrink-0" />
-            <span>
-              {stayDates({ check_in: request.check_in, check_out: request.check_out })}
-            </span>
-            {hotelNights > 0 && (
-              <span className="text-2xs font-normal opacity-85">
-                ({hotelNights} {hotelNights === 1 ? 'nt' : 'nts'})
+        <>
+          {request.check_in ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-md border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-xs font-semibold text-purple-900 dark:text-purple-200"
+              title="Hotel booking dates"
+            >
+              <CalendarClock size={12} className="text-purple-600 dark:text-purple-400 shrink-0" />
+              <span>
+                {stayDates({ check_in: request.check_in, check_out: request.check_out })}
               </span>
-            )}
-          </span>
-        ) : null
+              {hotelNights > 0 && (
+                <span className="text-2xs font-normal opacity-85">
+                  ({hotelNights} {hotelNights === 1 ? 'nt' : 'nts'})
+                </span>
+              )}
+            </span>
+          ) : null}
+          {request.hotel_occupancy && (
+            <span className="inline-flex items-center gap-1 rounded border border-indigo-500/20 bg-indigo-500/10 px-1.5 py-0.5 text-2xs font-medium text-indigo-700 dark:text-indigo-300">
+              {request.hotel_occupancy}
+              {request.lodging_limit_per_night ? ` · ₹${request.lodging_limit_per_night}` : ''}
+            </span>
+          )}
+          {request.city_tier && (
+            <span className="inline-flex items-center gap-1 rounded border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-2xs font-medium text-violet-700 dark:text-violet-300">
+              {request.city_tier === 'CATEGORY_A' ? 'Cat A' : request.city_tier === 'CATEGORY_B' ? 'Cat B' : 'Cat C'}
+            </span>
+          )}
+        </>
       ) : request.start_at ? (
-        <span
-          className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-900 dark:text-amber-200"
-          title="Booking date and departure time"
-        >
-          <CalendarClock size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />
-          <span>{dayTime(request.start_at)}</span>
+        <span className="inline-flex items-center gap-1.5 flex-wrap">
+          <span
+            className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-900 dark:text-amber-200"
+            title="Booking date and departure time"
+          >
+            <CalendarClock size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />
+            <span>{dayTime(request.start_at)}</span>
+          </span>
+          {request.end_at && (
+            <span className="inline-flex items-center gap-1 text-2xs text-text-muted">
+              <span>
+                {request.request_type === 'LOCAL_CAB' || request.mode === 'CAB'
+                  ? 'drop-off'
+                  : 'arrives'}
+              </span>
+              <span className="font-medium text-text">{dayTime(request.end_at)}</span>
+            </span>
+          )}
         </span>
       ) : null}
     </div>

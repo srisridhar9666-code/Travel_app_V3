@@ -1,5 +1,6 @@
 import { Clock, ThumbsDown, ThumbsUp } from 'lucide-react';
 
+import { dayTime } from '@/lib/requests';
 import { cn } from '@/lib/utils';
 import { RECOMMENDATION_LABELS, type RequestTraveller } from '@/types';
 
@@ -35,11 +36,16 @@ export function ManagerReview({
         <Icon size={13} className="mt-px shrink-0" />
         <span className="min-w-0 break-words">
           <span className="font-semibold">
-            {who ? `Manager ${who}: ` : 'Manager: '}
+            {who ? `L1 Manager ${who}: ` : 'L1 Manager: '}
             {RECOMMENDATION_LABELS[traveller.manager_recommendation]}
           </span>
           {traveller.manager_comment && (
-            <span className="text-text-muted"> - {traveller.manager_comment}</span>
+            <span className="text-text-muted"> - "{traveller.manager_comment}"</span>
+          )}
+          {traveller.manager_reviewed_at && (
+            <span className="ml-1 text-2xs opacity-80 font-normal">
+              ({dayTime(traveller.manager_reviewed_at)})
+            </span>
           )}
         </span>
       </p>
@@ -53,7 +59,7 @@ export function ManagerReview({
   if (traveller.status !== 'PENDING') {
     return (
       <p className={cn('text-2xs text-text-subtle', className)}>
-        No recommendation from {traveller.manager_name}
+        No L1 review from {traveller.manager_name}
       </p>
     );
   }
@@ -66,7 +72,7 @@ export function ManagerReview({
       )}
     >
       <Clock size={13} className="shrink-0" />
-      Waiting for {traveller.manager_name}
+      Awaiting L1 Review ({traveller.manager_name})
     </p>
   );
 }

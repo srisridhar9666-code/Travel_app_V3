@@ -102,12 +102,25 @@ def engine():
 
     # Built from the models rather than by Alembic: faster, and migration
     # fidelity is checked separately by `alembic check` in CI.
-    Base.metadata.drop_all(test_engine)
+    with test_engine.connect() as conn:
+        conn.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
+        tables = conn.execute(text("SHOW TABLES;")).scalars().all()
+        for t in tables:
+            conn.execute(text(f"DROP TABLE IF EXISTS `{t}`;"))
+        conn.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
+        conn.commit()
+
     Base.metadata.create_all(test_engine)
 
     yield test_engine
 
-    Base.metadata.drop_all(test_engine)
+    with test_engine.connect() as conn:
+        conn.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
+        tables = conn.execute(text("SHOW TABLES;")).scalars().all()
+        for t in tables:
+            conn.execute(text(f"DROP TABLE IF EXISTS `{t}`;"))
+        conn.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
+        conn.commit()
     test_engine.dispose()
 
 

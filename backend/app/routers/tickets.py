@@ -34,6 +34,7 @@ from app.core.enums import (
     AuditAction,
     NotificationChannel,
     RequestType,
+    Role,
     TicketStatus,
     TravellerStatus,
 )
@@ -44,6 +45,7 @@ from app.models.user import User
 from app.schemas.ticket import CombinedRead, ConfirmPayload, TicketRead
 from app.services import audit, costs, extraction, notifications, storage
 from app.services import decisions
+from app.services.telemetry_guard import get_or_create_tenant_settings
 
 router = APIRouter(tags=["tickets"])
 
@@ -189,7 +191,7 @@ async def upload_ticket(
     request_id: int,
     traveller_id: Annotated[int, Query(description="Whose ticket this is")],
     file: UploadFile,
-    actor: AdminUser,
+    actor: CurrentUser,
     http_request: Request,
     db: DbSession,
 ) -> TicketRead:
@@ -201,6 +203,22 @@ async def upload_ticket(
     in by hand.
     """
     row = _load_request(db, request_id, actor)
+    can_upload = (
+        actor.is_admin
+        or (
+            actor.is_vendor
+            and actor.vendor_id is not None
+            and (
+                row.assigned_vendor_id == actor.vendor_id
+                or any(t.vendor_id == actor.vendor_id for t in row.travellers)
+            )
+        )
+    )
+    if not can_upload:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operations administrators or the assigned vendor can upload tickets/vouchers.",
+        )
 
     traveller = next((t for t in row.travellers if t.id == traveller_id), None)
     if traveller is None:
@@ -223,12 +241,14 @@ async def upload_ticket(
     content_type = (file.content_type or "").split(";")[0].strip().lower()
     path = storage.save_in("tickets", row.id, data, extension)
 
+    autofill_enabled = get_or_create_tenant_settings(db, actor.tenant_id).ai_ticket_autofill_enabled
+
     # The model takes seconds. Off the event loop, so several files uploaded
     # at once are read side by side and nobody else's request waits on them -
     # and before anything is written, so this request holds no lock while it
     # waits: the audit chain's tail row is locked from audit.record to commit,
     # and a second upload blocking on it would block the loop with it.
-    result = await run_in_threadpool(extraction.extract, data, content_type)
+    result = await run_in_threadpool(extraction.extract, data, content_type) if autofill_enabled else None
 
     ticket = TicketDocument(
         tenant_id=actor.tenant_id,
@@ -259,7 +279,8 @@ async def upload_ticket(
         request=http_request,
     )
 
-    _apply_extraction(db, ticket, result, actor, http_request)
+    if result is not None:
+        _apply_extraction(db, ticket, result, actor, http_request)
     db.commit()
     db.refresh(ticket)
     return _to_read(ticket)
@@ -366,7 +387,7 @@ def reextract(
 
 
 @router.get("/requests/{request_id}/tickets", response_model=list[TicketRead])
-def list_tickets(request_id: int, actor: AdminUser, db: DbSession) -> list[TicketRead]:
+def list_tickets(request_id: int, actor: CurrentUser, db: DbSession) -> list[TicketRead]:
     _load_request(db, request_id, actor)
     rows = (
         db.execute(
@@ -385,13 +406,29 @@ def list_tickets(request_id: int, actor: AdminUser, db: DbSession) -> list[Ticke
 def read_together(
     request_id: int,
     ids: Annotated[list[int], Query(min_length=1, max_length=20)],
-    actor: AdminUser,
+    actor: CurrentUser,
     db: DbSession,
 ) -> CombinedRead:
     """What several uploaded files say together - the booking window fills
     from all of them, not just the first. Files on this request only, and
     none thrown away."""
-    _load_request(db, request_id, actor)
+    req = _load_request(db, request_id, actor)
+    can_access = (
+        actor.is_admin
+        or (
+            actor.is_vendor
+            and actor.vendor_id is not None
+            and (
+                req.assigned_vendor_id == actor.vendor_id
+                or any(t.vendor_id == actor.vendor_id for t in req.travellers)
+            )
+        )
+    )
+    if not can_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operations administrators or the assigned vendor can combine ticket extraction.",
+        )
     rows = db.execute(
         select(TicketDocument)
         .where(
@@ -430,13 +467,37 @@ def pending_review(actor: AdminUser, db: DbSession) -> list[TicketRead]:
 
 
 @router.get("/tickets/{ticket_id}", response_model=TicketRead)
-def get_ticket(ticket_id: int, actor: AdminUser, db: DbSession) -> TicketRead:
-    return _to_read(_load_ticket(db, ticket_id, actor))
+def get_ticket(ticket_id: int, actor: CurrentUser, db: DbSession) -> TicketRead:
+    ticket = _load_ticket(db, ticket_id, actor)
+    can_read = False
+    if actor.is_admin:
+        can_read = True
+    elif ticket.request:
+        if ticket.request.requester_id == actor.id:
+            can_read = True
+        elif any(t.user_id == actor.id for t in ticket.request.travellers):
+            can_read = True
+        elif actor.role == Role.VENDOR and actor.vendor_id is not None and (
+            ticket.request.assigned_vendor_id == actor.vendor_id
+            or any(t.vendor_id == actor.vendor_id for t in ticket.request.travellers)
+        ):
+            can_read = True
+        elif actor.role == Role.MANAGER and any(
+            t.manager_id == actor.id or (t.user and t.user.manager_id == actor.id)
+            for t in ticket.request.travellers
+        ):
+            can_read = True
+    if not can_read:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this ticket.",
+        )
+    return _to_read(ticket)
 
 
 @router.get("/tickets/{ticket_id}/file")
-def download_ticket(ticket_id: int, actor: AdminUser, db: DbSession) -> Response:
-    """The document itself, so the reviewer can read it beside the fields.
+def download_ticket(ticket_id: int, actor: CurrentUser, db: DbSession) -> Response:
+    """The document itself, so the reviewer, traveller, or vendor can read it beside the fields.
 
     Fetched through the API rather than linked: the file carries a PNR and a
     passenger name, and it is never reachable without a token.
@@ -444,6 +505,30 @@ def download_ticket(ticket_id: int, actor: AdminUser, db: DbSession) -> Response
     ticket = _load_ticket(db, ticket_id, actor)
     if not ticket.file_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No file on this ticket.")
+
+    can_read = False
+    if actor.is_admin:
+        can_read = True
+    elif ticket.request:
+        if ticket.request.requester_id == actor.id:
+            can_read = True
+        elif any(t.user_id == actor.id for t in ticket.request.travellers):
+            can_read = True
+        elif actor.role == Role.VENDOR and actor.vendor_id is not None and (
+            ticket.request.assigned_vendor_id == actor.vendor_id
+            or any(t.vendor_id == actor.vendor_id for t in ticket.request.travellers)
+        ):
+            can_read = True
+        elif actor.role == Role.MANAGER and any(
+            t.manager_id == actor.id or (t.user and t.user.manager_id == actor.id)
+            for t in ticket.request.travellers
+        ):
+            can_read = True
+    if not can_read:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this ticket document.",
+        )
 
     data = storage.read(ticket.file_path)
     return Response(
@@ -457,17 +542,27 @@ def download_ticket(ticket_id: int, actor: AdminUser, db: DbSession) -> Response
 
 
 def _may_download(db: Session, request_id: int, traveller_id: int, user: User) -> bool:
-    """The traveller themself, whoever raised the request (they often book for
-    a group), and admins."""
+    """The traveller themself, whoever raised the request, the assigned vendor, and admins."""
     row = db.get(TravelRequest, request_id)
     traveller = (
         next((t for t in row.travellers if t.id == traveller_id), None)
         if row is not None and row.tenant_id == user.tenant_id
         else None
     )
-    return traveller is not None and (
-        user.is_admin or user.id in (traveller.user_id, row.requester_id)
-    )
+    if traveller is None:
+        return False
+    if user.is_admin or user.id in (traveller.user_id, row.requester_id):
+        return True
+    if user.role == Role.VENDOR and user.vendor_id is not None and (
+        row.assigned_vendor_id == user.vendor_id
+        or traveller.vendor_id == user.vendor_id
+    ):
+        return True
+    if user.role == Role.MANAGER and (
+        traveller.manager_id == user.id or (traveller.user and traveller.user.manager_id == user.id)
+    ):
+        return True
+    return False
 
 
 def _confirmed_file(ticket: TicketDocument) -> Response:

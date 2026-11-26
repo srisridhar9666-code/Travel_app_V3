@@ -36,6 +36,7 @@ from app.core.enums import (
     CabTrip,
     CabType,
     CancellationStatus,
+    HotelOccupancy,
     ManagerRecommendation,
     NotificationCategory,
     NotificationChannel,
@@ -198,6 +199,25 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
     hotel_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     check_in: Mapped[date | None] = mapped_column(Date, nullable=True)
     check_out: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: Hotel occupancy entitlement: Single (default), Double or Triple (SOW Section 1.1 & 7)
+    hotel_occupancy: Mapped[HotelOccupancy] = mapped_column(
+        _enum(HotelOccupancy),
+        default=HotelOccupancy.SINGLE,
+        server_default=HotelOccupancy.SINGLE.value,
+        nullable=False,
+    )
+    #: Contracted commercial vendor assigned for fulfillment (SOW Section 1.1 & 6)
+    assigned_vendor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vendors.id", ondelete="SET NULL", name="fk_requests_assigned_vendor"),
+        nullable=True,
+        index=True,
+    )
+    #: Selected hotel proposal chosen by employee from vendor options (SOW Section 7)
+    selected_hotel_proposal_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hotel_proposals.id", ondelete="SET NULL", name="fk_requests_selected_proposal"),
+        nullable=True,
+        index=True,
+    )
 
     #: Why this trip is happening. Mandatory on new requests (enforced in the
     #: schema, not the column, so the rows that predate it stay readable). An
@@ -235,6 +255,19 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
     cancelled_by = relationship("User", foreign_keys=[cancelled_by_id])
     extends = relationship(
         "TravelRequest", remote_side="TravelRequest.id", foreign_keys=[extends_request_id]
+    )
+    assigned_vendor = relationship("Vendor", foreign_keys=[assigned_vendor_id], lazy="joined")
+    selected_hotel_proposal = relationship(
+        "HotelProposal", foreign_keys=[selected_hotel_proposal_id], post_update=True
+    )
+    hotel_proposals = relationship(
+        "HotelProposal", back_populates="request", foreign_keys="HotelProposal.request_id", cascade="all, delete-orphan"
+    )
+    cab_telemetries = relationship(
+        "CabTelemetry", back_populates="request", foreign_keys="CabTelemetry.request_id", cascade="all, delete-orphan"
+    )
+    hotel_verifications = relationship(
+        "HotelStayVerification", back_populates="request", foreign_keys="HotelStayVerification.request_id", cascade="all, delete-orphan"
     )
     travellers: Mapped[list["RequestTraveller"]] = relationship(
         back_populates="request",

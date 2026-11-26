@@ -35,6 +35,7 @@ from app.core import clock
 from app.core.enums import (
     ALLOWED_TRAVELLER_TRANSITIONS,
     AuditAction,
+    ManagerRecommendation,
     RequestType,
     TicketStatus,
     TravellerStatus,
@@ -169,6 +170,7 @@ def _notify(
     reason: str | None,
     actor: User | None = None,
     attachment: notifications.AttachedFile | None = None,
+    send_email: bool = True,
 ) -> None:
     """Tell the traveller what happened to them, with their manager copied.
 
@@ -246,6 +248,7 @@ def _notify(
         email_body="\n".join(detail),
         cc_users=[manager] if manager is not None else None,
         attachment=attachment,
+        send_email=send_email,
     )
 
     by = f" by {actor.full_name}" if actor is not None else ""
@@ -295,6 +298,7 @@ def apply(
     decision: Decision,
     http_request=None,
     notify: bool = True,
+    send_email: bool | None = None,
 ) -> RequestTraveller:
     """Move one traveller to a new status, with everything that has to go with it.
 
@@ -333,6 +337,27 @@ def apply(
     # Addendum B6, the admin half: approving over a live clash costs a typed
     # reason, and that reason is written to the ledger before the approval is.
     if target is TravellerStatus.APPROVED:
+        # Mandatory Two-Tier Approval Pipeline (SOW Section 6):
+        # Admin approval is strictly blocked until the direct manager records an APPROVED recommendation.
+        active_mgr = traveller.user.active_manager if traveller.user else None
+        if active_mgr is not None:
+            if traveller.manager_recommendation is None:
+                raise HTTPException(
+                    status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"Manager approval (L1) is required before Admin can approve "
+                        f"{traveller.user.full_name}. This request is awaiting manager review."
+                    ),
+                )
+            if traveller.manager_recommendation is ManagerRecommendation.NOT_RECOMMENDED:
+                raise HTTPException(
+                    status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"{traveller.user.full_name} was not recommended by their manager "
+                        f"({active_mgr.full_name}) and cannot be approved by Admin."
+                    ),
+                )
+
         clashes = live_conflicts_for(
             db, tenant_id=tenant_id, request=request, traveller=traveller
         )
@@ -405,6 +430,7 @@ def apply(
             reason=traveller.decision_reason,
             actor=actor,
             attachment=attachment,
+            send_email=notify if send_email is None else send_email,
         )
     db.flush()
     return traveller

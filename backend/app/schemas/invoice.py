@@ -147,6 +147,10 @@ class InvoicePayment(BaseModel):
         return self
 
 
+class InvoiceVerify(BaseModel):
+    comment: str | None = Field(default=None, max_length=500)
+
+
 class InvoiceRejection(BaseModel):
     """A rejection always says why: it is what the admins go and fix."""
 
@@ -245,6 +249,9 @@ class InvoiceRead(InvoiceSummary):
     updated_by_name: str | None = None
     updated_at: UTCInstant
     submitted_by_name: str | None = None
+    verified_by_name: str | None = None
+    verified_at: UTCInstant | None = None
+    verification_comment: str | None = None
     decided_by_name: str | None = None
     decision_comment: str | None = None
     paid_by_name: str | None = None
@@ -256,6 +263,7 @@ class InvoiceRead(InvoiceSummary):
     can_edit: bool = False
     can_submit: bool = False
     can_delete: bool = False
+    can_verify: bool = False
     can_decide: bool = False
     #: A super admin, on an approved invoice: mark it paid, or correct it.
     can_record_payment: bool = False

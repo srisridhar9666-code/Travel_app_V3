@@ -4,25 +4,31 @@ import { useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { CancellationAsks } from '@/components/CancellationAsks';
+import { CabTelemetryCard } from '@/components/CabTelemetryCard';
+import { HotelStayVerificationCard } from '@/components/HotelStayVerificationCard';
 import { ManagerReview } from '@/components/ManagerReview';
 import { Modal } from '@/components/Modal';
 import { PriorityBadge } from '@/components/PriorityBadge';
+import { RequestTelemetryBadge } from '@/components/RequestTelemetryBadge';
 import { RequestTripHighlight } from '@/components/RequestTripHighlight';
 import { ConflictList } from '@/components/RequestForm';
 import {
   Badge,
   Button,
   Card,
+  DateRangeFilter,
   EmptyState,
   Field,
+  Input,
   ItemCard,
   ItemList,
   ItemNumber,
   PageHeader,
   Skeleton,
+  tabButtonClass,
 } from '@/components/ui';
 import { errorMessage, fetchTeamReviews, recommendRequest } from '@/lib/api';
-import { cabAsked, campaignLabel, REQUEST_ACCENT } from '@/lib/requests';
+import { cabAsked, campaignLabel, matchesDateRange, REQUEST_ACCENT } from '@/lib/requests';
 import { formatInstant } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/store/auth';
@@ -31,6 +37,9 @@ import {
   REQUEST_STATUS_LABELS,
   TRAVELLER_STATUS_LABELS,
   TRAVEL_MODE_LABELS,
+  CAB_TYPE_LABELS,
+  type CabType,
+  type HotelOccupancy,
   type ManagerRecommendation,
   type RequestTraveller,
   type ReviewFilter,
@@ -75,19 +84,28 @@ export default function TeamApprovalsPage() {
   const queryClient = useQueryClient();
   const me = useAuth((s) => s.user);
   const [tab, setTab] = useState<ReviewFilter>('waiting');
+  const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
   const [comment, setComment] = useState('');
   const [covered, setCovered] = useState<number[]>([]);
+  const [occupancy, setOccupancy] = useState<HotelOccupancy>('SINGLE');
+  const [cabType, setCabType] = useState<CabType>('NO_PREFERENCE');
 
   // Both lists load up front, so each tab's count is true before it is opened.
   // The waiting one shares its key with the sidebar badge.
   const waiting = useQuery({
     queryKey: ['team-reviews', 'waiting'],
     queryFn: () => fetchTeamReviews('waiting'),
+    refetchInterval: 10000,
+    refetchOnWindowFocus: true,
   });
   const reviewed = useQuery({
     queryKey: ['team-reviews', 'reviewed'],
     queryFn: () => fetchTeamReviews('reviewed'),
+    refetchInterval: 10000,
+    refetchOnWindowFocus: true,
   });
   const current = tab === 'waiting' ? waiting : reviewed;
 
@@ -96,11 +114,13 @@ export default function TeamApprovalsPage() {
     request.travellers.filter((t) => me && t.manager_id === me.id);
 
   const save = useMutation({
-    mutationFn: (vars: Draft & { comment: string; travellerIds?: number[] }) =>
+    mutationFn: (vars: Draft & { comment: string; travellerIds?: number[]; hotel_occupancy?: HotelOccupancy; cab_type?: CabType }) =>
       recommendRequest(vars.request.id, {
         recommendation: vars.verdict,
         comment: vars.comment,
         traveller_ids: vars.travellerIds,
+        hotel_occupancy: vars.hotel_occupancy,
+        cab_type: vars.cab_type,
       }),
     meta: { errorFallback: 'Could not save your recommendation.' },
     onSuccess: (_, vars) => {
@@ -119,6 +139,8 @@ export default function TeamApprovalsPage() {
     setDraft(null);
     setComment('');
     setCovered([]);
+    setOccupancy('SINGLE');
+    setCabType('NO_PREFERENCE');
   }
 
   const start = (request: TravelRequest, verdict: ManagerRecommendation) => {
@@ -128,6 +150,8 @@ export default function TeamApprovalsPage() {
     const earlier = team.find((t) => t.manager_comment)?.manager_comment ?? '';
     setComment(earlier);
     setCovered(team.map((t) => t.id));
+    setOccupancy(request.hotel_occupancy || 'SINGLE');
+    setCabType(request.cab_type || 'NO_PREFERENCE');
     setDraft({ request, verdict, team });
   };
 
@@ -139,10 +163,26 @@ export default function TeamApprovalsPage() {
       // Only named when they chose a subset; otherwise the server covers every
       // one of their people still pending, which is the same set.
       travellerIds: covered.length === draft.team.length ? undefined : covered,
+      hotel_occupancy: draft.request.request_type === 'HOTEL' && draft.verdict === 'RECOMMENDED' ? occupancy : undefined,
+      cab_type: draft.request.request_type === 'LOCAL_CAB' && draft.verdict === 'RECOMMENDED' ? cabType : undefined,
     });
   };
 
-  const rows = current.data?.items ?? [];
+  const rawRows = current.data?.items ?? [];
+  const rows = rawRows.filter((r) => {
+    if (!matchesDateRange(r, dateFrom, dateTo)) return false;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      const hitId = String(r.id).includes(q);
+      const hitRequester = r.requester_name?.toLowerCase().includes(q);
+      const hitTraveller = r.travellers.some((t) => t.full_name.toLowerCase().includes(q));
+      const hitPlace = [r.origin, r.destination, r.pickup_city, r.drop_city, r.hotel_city, r.project_name]
+        .filter(Boolean)
+        .some((v) => v!.toLowerCase().includes(q));
+      if (!hitId && !hitRequester && !hitTraveller && !hitPlace) return false;
+    }
+    return true;
+  });
   const recommending = draft?.verdict === 'RECOMMENDED';
   const subject = draft
     ? draft.team.length === 1
@@ -160,27 +200,54 @@ export default function TeamApprovalsPage() {
       <CancellationAsks scope="manager" />
 
       <Card>
-        <div role="group" aria-label="Which requests" className="flex gap-1 border-b border-border px-3 py-2">
-          {TABS.map((item) => {
-            const count = (item.key === 'waiting' ? waiting : reviewed).data?.total;
-            return (
-              <button
-                key={item.key}
-                type="button"
-                aria-pressed={tab === item.key}
-                onClick={() => setTab(item.key)}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-sm transition-colors',
-                  tab === item.key
-                    ? 'bg-surface-sunken font-medium text-text'
-                    : 'text-text-muted hover:bg-surface-sunken hover:text-text',
-                )}
-              >
-                {item.label}
-                {count !== undefined && <span className="ml-1.5 text-text-subtle">{count}</span>}
-              </button>
-            );
-          })}
+        <div role="group" aria-label="Which requests" className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5 bg-surface-sunken/30">
+          <div className="flex gap-1.5 rounded-lg border border-border/70 bg-surface-raised p-0.5">
+            {TABS.map((item) => {
+              const count = (item.key === 'waiting' ? waiting : reviewed).data?.total;
+              const active = tab === item.key;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setTab(item.key)}
+                  className={tabButtonClass(active)}
+                >
+                  <span>{item.label}</span>
+                  {count !== undefined && (
+                    <span
+                      className={cn(
+                        'rounded-full px-1.5 py-0.2 text-2xs tabular-nums',
+                        active ? 'bg-primary-fg/15 text-primary-fg' : 'bg-surface-sunken text-text-subtle',
+                      )}
+                    >
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-5 py-3">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search employee, place, campaign or no."
+            className="min-w-40 flex-1 sm:max-w-64"
+            aria-label="Search team requests"
+          />
+          <DateRangeFilter
+            from={dateFrom}
+            to={dateTo}
+            onFromChange={setDateFrom}
+            onToChange={setDateTo}
+            onClear={() => {
+              setDateFrom('');
+              setDateTo('');
+            }}
+          />
         </div>
 
         {current.isPending ? (
@@ -220,12 +287,18 @@ export default function TeamApprovalsPage() {
                       <Icon size={15} />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
                         <ItemNumber value={request.id} />
                         <RequestTripHighlight request={request} />
                         <Badge tone={request.status === 'SUBMITTED' ? 'info' : 'neutral'}>
                           {REQUEST_STATUS_LABELS[request.status]}
                         </Badge>
+                        <RequestTelemetryBadge
+                          requestId={request.id}
+                          requestType={request.request_type}
+                          mode={request.mode}
+                          requestStatus={request.status}
+                        />
                         <PriorityBadge priority={request.priority} />
                         {request.extends_request_id != null && (
                           <Badge tone="brand">
@@ -234,7 +307,7 @@ export default function TeamApprovalsPage() {
                           </Badge>
                         )}
                       </div>
-                      <p className="mt-1 text-xs text-text-muted">
+                      <p className="mt-2 text-xs text-text-muted leading-relaxed">
                         {campaignLabel(request)} · raised by {request.requester_name}
                         {/* A cab's size and distance, which a manager weighs too. */}
                         {cabAsked(request)
@@ -326,6 +399,30 @@ export default function TeamApprovalsPage() {
                       )}
                     </div>
                   )}
+
+                  {(request.request_type === 'LOCAL_CAB' || request.mode === 'CAB') && (
+                    <div className="mt-3">
+                      <CabTelemetryCard
+                        requestId={request.id}
+                        requestStatus={request.status}
+                        cabTrip={request.cab_trip}
+                        readOnly={!request.travellers.some((t) => t.user_id === me?.id)}
+                        onUpdated={() => queryClient.invalidateQueries({ queryKey: ['team-reviews'] })}
+                      />
+                    </div>
+                  )}
+
+                  {request.request_type === 'HOTEL' && (
+                    <div className="mt-3">
+                      <HotelStayVerificationCard
+                        requestId={request.id}
+                        requestStatus={request.status}
+                        hotelCity={request.hotel_city}
+                        readOnly={!request.travellers.some((t) => t.user_id === me?.id)}
+                        onUpdated={() => queryClient.invalidateQueries({ queryKey: ['team-reviews'] })}
+                      />
+                    </div>
+                  )}
                 </ItemCard>
               );
             })}
@@ -363,6 +460,99 @@ export default function TeamApprovalsPage() {
                   <span className="font-medium text-text">Reason:</span> {draft.request.travel_reason}
                 </p>
               )}
+            </div>
+          )}
+
+          {draft && draft.request.request_type === 'HOTEL' && recommending && (
+            <div className="rounded-lg border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/20 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-indigo-950 dark:text-indigo-200">
+                  Manager Occupancy Evaluation
+                </span>
+                {draft.request.city_tier && (
+                  <span className="rounded bg-indigo-600/15 px-2 py-0.5 text-2xs font-bold text-indigo-800 dark:text-indigo-300">
+                    {draft.request.city_tier === 'CATEGORY_A' ? 'Cat A (₹1,500 Single / ₹2,000 Double)' : draft.request.city_tier === 'CATEGORY_B' ? 'Cat B (₹1,000 Single / ₹1,500 Double)' : 'Cat C (₹750 Single / ₹1,200 Double)'}
+                  </span>
+                )}
+              </div>
+              <p className="text-2xs text-text-muted">
+                Evaluate whether your team member is eligible for Single or Double occupancy for this stay.
+              </p>
+              <div className="flex gap-4 pt-1">
+                <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
+                  <input
+                    type="radio"
+                    name="occupancy"
+                    value="SINGLE"
+                    checked={occupancy === 'SINGLE'}
+                    onChange={() => setOccupancy('SINGLE')}
+                    className="h-4 w-4 accent-indigo-600"
+                  />
+                  Single Occupancy
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
+                  <input
+                    type="radio"
+                    name="occupancy"
+                    value="DOUBLE"
+                    checked={occupancy === 'DOUBLE'}
+                    onChange={() => setOccupancy('DOUBLE')}
+                    className="h-4 w-4 accent-indigo-600"
+                  />
+                  Double Occupancy
+                </label>
+              </div>
+            </div>
+          )}
+
+          {draft && draft.request.request_type === 'LOCAL_CAB' && recommending && (
+            <div className="rounded-lg border border-amber-200 dark:border-amber-800/60 bg-amber-50/50 dark:bg-amber-950/20 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-amber-950 dark:text-amber-200">
+                  Vehicle Category Evaluation
+                </span>
+                <span className="text-2xs text-text-muted">
+                  Requested: {CAB_TYPE_LABELS[draft.request.cab_type || 'NO_PREFERENCE']}
+                </span>
+              </div>
+              <p className="text-2xs text-text-muted">
+                Evaluate which car class your team members need (Dzire 4 seats vs Ertiga 7 seats) so the vendor dispatches the correct vehicle.
+              </p>
+              <div className="flex flex-wrap gap-4 pt-1">
+                <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
+                  <input
+                    type="radio"
+                    name="manager_cab_type"
+                    value="NO_PREFERENCE"
+                    checked={cabType === 'NO_PREFERENCE'}
+                    onChange={() => setCabType('NO_PREFERENCE')}
+                    className="h-4 w-4 accent-amber-600"
+                  />
+                  No Preference
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
+                  <input
+                    type="radio"
+                    name="manager_cab_type"
+                    value="SEDAN"
+                    checked={cabType === 'SEDAN'}
+                    onChange={() => setCabType('SEDAN')}
+                    className="h-4 w-4 accent-amber-600"
+                  />
+                  Dzire / Sedan (4 seats)
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-xs font-medium">
+                  <input
+                    type="radio"
+                    name="manager_cab_type"
+                    value="SUV"
+                    checked={cabType === 'SUV'}
+                    onChange={() => setCabType('SUV')}
+                    className="h-4 w-4 accent-amber-600"
+                  />
+                  Ertiga / SUV (7 seats)
+                </label>
+              </div>
             </div>
           )}
 

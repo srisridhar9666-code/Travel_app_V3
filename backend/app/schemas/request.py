@@ -11,9 +11,11 @@ from app.core.enums import (
     CabTrip,
     CabType,
     CancellationStatus,
+    CityTier,
     ConflictKind,
     ConflictSeverity,
     Designation,
+    HotelOccupancy,
     InvoiceStatus,
     LOCAL_CAB_MAX_KM,
     MAX_CAB_DISTANCE_KM,
@@ -46,6 +48,7 @@ EDITABLE_FIELDS = (
     "start_at",
     "end_at",
     "hotel_city",
+    "hotel_occupancy",
     "check_in",
     "check_out",
     "cab_type",
@@ -83,6 +86,7 @@ class RequestBody(BaseModel):
     end_at: datetime | None = None
 
     hotel_city: str | None = Field(default=None, max_length=120)
+    hotel_occupancy: HotelOccupancy = HotelOccupancy.SINGLE
     check_in: date | None = None
     check_out: date | None = None
 
@@ -271,6 +275,8 @@ class TravellerRead(BaseModel):
     #: Shown to anyone who can see the request.
     manager_id: int | None = None
     manager_name: str | None = None
+    #: Safe progress flag visible to the traveller without revealing the private advice.
+    manager_reviewed: bool = False
     #: What the manager said. Only an admin, or this traveller's own manager,
     #: is shown it; everyone else - the traveller included - reads None.
     manager_recommendation: ManagerRecommendation | None = None
@@ -314,6 +320,8 @@ class CoStayMatchRead(BaseModel):
     designation: Designation | None = None
     request_id: int
     hotel_city: str
+    hotel_name: str | None = None
+    same_hotel: bool = False
     check_in: date
     check_out: date | None = None
     overlapping_nights: int
@@ -370,13 +378,21 @@ class RequestRead(BaseModel):
     end_at: datetime | None = None
 
     hotel_city: str | None = None
+    hotel_occupancy: HotelOccupancy = HotelOccupancy.SINGLE
+    city_tier: CityTier | None = None
+    lodging_limit_per_night: int | None = None
     check_in: date | None = None
     check_out: date | None = None
+    hotel_verification_status: str | None = None
+    assigned_vendor_id: int | None = None
+    assigned_vendor_name: str | None = None
+    selected_hotel_proposal_id: int | None = None
 
     # --- cab: asked for, sent, and extended. Null on anything but a cab. -----
     cab_type: CabType | None = None
     cab_trip: CabTrip | None = None
     cab_distance_km: int | None = None
+    cab_telemetry_status: str | None = None
     #: The car an admin recorded as sent, with its number and driver. Shown to
     #: everyone who can see the request: the travellers need it to find the car.
     booked_cab_type: CabType | None = None
@@ -564,6 +580,12 @@ class DecisionPayload(BaseModel):
     #: Only when marking booked: the uploaded ticket the booking is from. It is
     #: confirmed with the booking and attached to the traveller's email.
     ticket_id: int | None = None
+    #: Optional: assigned vendor for fulfillment (SOW Section 6)
+    assigned_vendor_id: int | None = None
+    #: Optional: admin confirmation/override of hotel occupancy (SOW Section 6)
+    hotel_occupancy: HotelOccupancy | None = None
+    #: Optional: admin confirmation/override of cab car class
+    cab_type: CabType | None = None
 
     @model_validator(mode="after")
     def _target_is_a_decision(self):
@@ -572,6 +594,11 @@ class DecisionPayload(BaseModel):
         if self.to_status is not TravellerStatus.BOOKED:
             self.ticket_id = None
         return self
+
+
+class AssignVendorPayload(BaseModel):
+    """Assign contracted commercial vendor for fulfillment (SOW Section 6)."""
+    vendor_id: int | None = None
 
 
 class BatchDecisionItem(DecisionPayload):
@@ -587,6 +614,9 @@ class BatchDecisionPayload(BaseModel):
     """
 
     decisions: list[BatchDecisionItem] = Field(min_length=1)
+    assigned_vendor_id: int | None = None
+    hotel_occupancy: HotelOccupancy | None = None
+    cab_type: CabType | None = None
 
 
 class RecommendationPayload(BaseModel):
@@ -600,6 +630,9 @@ class RecommendationPayload(BaseModel):
     recommendation: ManagerRecommendation
     comment: str = Field(min_length=3, max_length=500)
     traveller_ids: list[int] | None = None
+    #: Manager Single vs Double occupancy evaluation during L1 review (SOW Section 6 & 7)
+    hotel_occupancy: HotelOccupancy | None = None
+    cab_type: CabType | None = None
 
     @field_validator("comment")
     @classmethod
@@ -616,6 +649,7 @@ class QueueCounts(BaseModel):
     awaiting: int
     partially_approved: int
     approved: int
+    ready_for_vendor: int = 0
     booked: int
     rejected: int
     cancelled: int

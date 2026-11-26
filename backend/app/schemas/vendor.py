@@ -63,6 +63,9 @@ class VendorCreate(_VendorFields):
     email: EmailStr | None = Field(default=None, max_length=255)
     gstin: str | None = Field(default=None, max_length=15)
     notes: str | None = Field(default=None, max_length=500)
+    create_login: bool = False
+    login_email: EmailStr | None = None
+    login_password: str | None = None
 
 
 class VendorUpdate(_VendorFields):
@@ -101,3 +104,23 @@ class VendorRead(BaseModel):
     #: against them: what a person deciding to switch one off wants to know.
     traveller_count: int = 0
     invoice_count: int = 0
+    #: Linked portal user information
+    portal_user_id: int | None = None
+    portal_email: str | None = None
+    portal_user_status: str | None = None
+
+
+class VendorLoginRequest(BaseModel):
+    email: EmailStr | None = None
+    password: str | None = None
+    full_name: str | None = None
+
+
+class VendorLoginResponse(BaseModel):
+    success: bool
+    user_id: int
+    email: str
+    full_name: str
+    message: str
+    temporary_password: str | None = None
+

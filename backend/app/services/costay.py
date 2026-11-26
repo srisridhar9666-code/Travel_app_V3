@@ -35,6 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+from fastapi import HTTPException, status as http_status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -76,6 +77,8 @@ class CoStayMatch:
     check_out: date | None
     overlapping_nights: int
     status: str
+    hotel_name: str | None = None
+    same_hotel: bool = False
 
 
 def _overlap_nights(a_in: date, a_out: date, b_in: date, b_out: date) -> int:
@@ -94,6 +97,7 @@ def find_matches(
     check_out: date | None,
     exclude_request_id: int | None = None,
     upcoming_from: date | None = None,
+    hotel_name: str | None = None,
 ) -> list[CoStayMatch]:
     """Colleagues this person could be offered a shared room with.
 
@@ -161,6 +165,16 @@ def find_matches(
             if nights <= 0:
                 continue
 
+        colleague_hotel = None
+        if getattr(request, "selected_hotel_proposal", None):
+            colleague_hotel = request.selected_hotel_proposal.hotel_name
+        elif traveller.booking_details and isinstance(traveller.booking_details, dict):
+            colleague_hotel = traveller.booking_details.get("hotel_name")
+
+        is_same_hotel = False
+        if hotel_name and colleague_hotel:
+            is_same_hotel = colleague_hotel.strip().casefold() == hotel_name.strip().casefold()
+
         seen.add(colleague.id)
         matches.append(
             CoStayMatch(
@@ -173,12 +187,13 @@ def find_matches(
                 check_out=request.check_out,
                 overlapping_nights=nights,
                 status=str(traveller.status),
+                hotel_name=colleague_hotel,
+                same_hotel=is_same_hotel,
             )
         )
 
-    # Most nights in common first: that is the pairing worth the admin's time.
-    # Without dates, the soonest stay first.
-    matches.sort(key=lambda m: (-m.overlapping_nights, m.check_in, m.full_name))
+    # Exact same hotel matches first, then most nights in common, then soonest stay.
+    matches.sort(key=lambda m: (not m.same_hotel, -m.overlapping_nights, m.check_in, m.full_name))
     return matches
 
 
@@ -257,8 +272,17 @@ def pair(a: RequestTraveller, b: RequestTraveller, *, confirmed_by: User | None)
 
     With `confirmed_by`, the pairing is signed off (an admin allotting it);
     without, it is a requester's ask that still waits for an admin.
+    Strictly verifies same-gender pairing (SOW Section 7).
     """
     from app.models.base import naive_utcnow
+
+    gender_a = a.user.gender if a.user else None
+    gender_b = b.user.gender if b.user else None
+    if not may_share_room(gender_a, gender_b):
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Shared rooms are strictly for colleagues of the same gender (Male with Male, Female with Female).",
+        )
 
     for mine, theirs in ((a, b), (b, a)):
         mine.room_sharing = RoomSharingChoice.SHARE_EXISTING

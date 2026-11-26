@@ -19,7 +19,7 @@ import { formatMoney } from '@/components/charts';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PaymentBadge, PaymentFields } from '@/components/InvoicePayment';
 import { Modal } from '@/components/Modal';
-import { Badge, Button, Card, CardHeader, EmptyState, Field, Skeleton, ZEBRA_ROWS } from '@/components/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, Skeleton, ZEBRA_ROWS } from '@/components/ui';
 import {
   approveInvoice,
   recordInvoicePayment,
@@ -29,6 +29,7 @@ import {
   fetchInvoice,
   rejectInvoice,
   submitInvoice,
+  verifyInvoice,
 } from '@/lib/api';
 import { INVOICE_EVENT_LABELS, dayLabel, periodText } from '@/lib/invoices';
 import { formatInstant, todayInIndia } from '@/lib/time';
@@ -38,6 +39,7 @@ import {
   INVOICE_STATUS_LABELS,
   INVOICE_STATUS_TONES,
   VENDOR_KIND_LABELS,
+  isSuperAdmin,
   type Invoice,
   type InvoiceEvent,
 } from '@/types';
@@ -98,6 +100,20 @@ function Detail({ invoice }: { invoice: Invoice }) {
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['invoices'] });
   const problems = invoice.lines.filter((line) => line.problem);
+
+  const [verifying, setVerifying] = useState(false);
+  const [verifyComment, setVerifyComment] = useState('');
+
+  const verify = useMutation({
+    mutationFn: () => verifyInvoice(invoice.id, verifyComment),
+    meta: { errorFallback: 'Could not verify the invoice.' },
+    onSuccess: (saved) => {
+      toast.success(`${saved.number} verified by Admin/Finance`);
+      setVerifying(false);
+      setVerifyComment('');
+      refresh();
+    },
+  });
 
   const submit = useMutation({
     mutationFn: () => submitInvoice(invoice.id),
@@ -206,8 +222,24 @@ function Detail({ invoice }: { invoice: Invoice }) {
           <p className="mt-1.5 text-sm text-text-muted">
             {invoice.vendor_name} · {periodText(invoice.period_start, invoice.period_end)}
           </p>
+          {invoice.verified_by_name && (
+            <div className="mt-2 inline-flex items-center gap-1.5 text-xs text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-500/30 px-3 py-1 rounded-md">
+              <Check size={13} className="text-emerald-600 shrink-0" />
+              <span>
+                Audited &amp; Verified by <strong>{invoice.verified_by_name}</strong>
+                {invoice.verified_at && ` on ${formatInstant(invoice.verified_at)}`}
+                {invoice.verification_comment && ` — "${invoice.verification_comment}"`}
+              </span>
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
+          {invoice.can_verify && (
+            <Button onClick={() => setVerifying(true)}>
+              <Check size={14} />
+              Verify Invoice
+            </Button>
+          )}
           {invoice.can_record_payment && !invoice.paid_on && (
             <Button onClick={() => openPayment('paid')}>
               <Check size={14} />
@@ -344,7 +376,8 @@ function Detail({ invoice }: { invoice: Invoice }) {
             <table className="w-full text-left text-sm">
               <thead className="border-b border-border text-2xs uppercase tracking-wide text-text-subtle">
                 <tr>
-                  <th className="px-4 py-2.5 font-medium sm:pl-5">Date</th>
+                  <th className="px-4 py-2.5 font-medium sm:pl-5">Txn ID</th>
+                  <th className="px-2 py-2.5 font-medium">Date</th>
                   <th className="px-2 py-2.5 font-medium">Traveller</th>
                   <th className="hidden px-2 py-2.5 font-medium md:table-cell">Trip</th>
                   <th className="hidden px-2 py-2.5 font-medium lg:table-cell">Reference</th>
@@ -357,6 +390,11 @@ function Detail({ invoice }: { invoice: Invoice }) {
                   // striped row too.
                   <tr key={line.id} className={cn(line.problem && '!bg-danger-soft/40')}>
                     <td className="whitespace-nowrap px-4 py-2.5 align-top text-xs sm:pl-5">
+                      <span className="inline-flex items-center rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-xs font-semibold text-text ring-1 ring-inset ring-border">
+                        #{line.request_id}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2.5 align-top text-xs">
                       {dayLabel(line.travel_date)}
                     </td>
                     <td className="px-2 py-2.5 align-top">
@@ -364,6 +402,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
                       <p className="text-2xs text-text-subtle">
                         {line.employee_code && `${line.employee_code} · `}
                         {line.project_code}
+                        {line.booking_reference && <span className="lg:hidden"> · Ref {line.booking_reference}</span>}
                       </p>
                       <p className="text-2xs text-text-muted md:hidden">{tripOf(line.description)}</p>
                       {line.problem && (
@@ -378,7 +417,6 @@ function Detail({ invoice }: { invoice: Invoice }) {
                     </td>
                     <td className="hidden px-2 py-2.5 align-top text-xs lg:table-cell">
                       {line.booking_reference ?? '—'}
-                      <span className="block text-2xs text-text-subtle">Request {line.request_id}</span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right align-top tabular-nums sm:pr-5">
                       {formatMoney(line.amount, true)}
@@ -388,7 +426,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
               </tbody>
               <tfoot className="border-t border-border">
                 <tr>
-                  <td className="px-4 py-3 text-xs font-medium sm:pl-5" colSpan={2}>
+                  <td className="px-4 py-3 text-xs font-medium sm:pl-5" colSpan={3}>
                     Total
                   </td>
                   <td className="hidden md:table-cell" />
@@ -407,6 +445,39 @@ function Detail({ invoice }: { invoice: Invoice }) {
         <CardHeader title="Timeline" description="From the activity log: every step, with who took it." />
         <Timeline events={invoice.history} />
       </Card>
+
+      <Modal
+        open={verifying}
+        onClose={() => setVerifying(false)}
+        title={`Verify ${invoice.number}`}
+        description="Audit this vendor invoice against the booked trip lines, telemetry odometer readings, and attached bills before super admin approval."
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setVerifying(false)}>
+              Cancel
+            </Button>
+            <Button loading={verify.isPending} onClick={() => verify.mutate()}>
+              <Check size={14} />
+              Confirm Verification
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <Field
+            label="Verification Notes / Comments"
+            htmlFor="verify-comment"
+            hint="Optional. Recorded in audit trail for super admin final approval."
+          >
+            <Input
+              id="verify-comment"
+              value={verifyComment}
+              onChange={(e) => setVerifyComment(e.target.value)}
+              placeholder="e.g. Verified against booking logs and odometer telemetry readings"
+            />
+          </Field>
+        </div>
+      </Modal>
 
       <Modal
         open={deciding !== null}
@@ -646,7 +717,7 @@ function StatusNote({
           <div className="rounded-lg bg-warning-soft px-4 py-3 text-sm">
             <p className="font-medium text-warning">Not paid yet</p>
             <p className="mt-0.5 text-text-muted">
-              {role === 'SUPER_ADMIN'
+              {isSuperAdmin(role)
                 ? 'Use Mark as paid once the money has gone to the vendor.'
                 : 'A super admin marks it paid once the money has gone.'}
             </p>
@@ -673,7 +744,7 @@ function StatusNote({
   if (invoice.status === 'SUBMITTED') {
     const text = invoice.can_decide
       ? 'Waiting for your decision. Check the trips against the vendor’s bill, then approve or reject.'
-      : role === 'SUPER_ADMIN'
+      : isSuperAdmin(role)
         ? 'You helped prepare this invoice, so another super admin must decide it.'
         : `Waiting for a super admin${invoice.submitted_by_name ? ` - sent by ${invoice.submitted_by_name}` : ''}${invoice.submitted_at ? ` on ${formatInstant(invoice.submitted_at)}` : ''}. It can still be edited; they are told if it changes.`;
     return <div className="rounded-lg bg-warning-soft px-4 py-3 text-sm text-text-muted">{text}</div>;

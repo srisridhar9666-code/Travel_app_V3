@@ -20,6 +20,7 @@ export const REQUEST_ACCENT: Record<RequestStatus, Accent> = {
   SUBMITTED: 'info',
   PARTIALLY_APPROVED: 'warning',
   APPROVED: 'success',
+  READY_FOR_VENDOR: 'info',
   BOOKED: 'success',
   REJECTED: 'danger',
   CANCELLED: 'neutral',
@@ -148,4 +149,53 @@ export function dayLabel(date: string): string {
     month: 'short',
     timeZone: 'UTC',
   });
+}
+
+export function getTripStartDate(req: TravelRequest): string | null {
+  if (req.request_type === 'HOTEL') {
+    return req.check_in || req.check_out || req.submitted_at || req.created_at;
+  }
+  return req.start_at || req.end_at || req.submitted_at || req.created_at;
+}
+
+export function getTripEndDate(req: TravelRequest): string | null {
+  if (req.request_type === 'HOTEL') {
+    return req.check_out || req.check_in;
+  }
+  return req.end_at || req.start_at;
+}
+
+export function matchesDateRange(req: TravelRequest, dateFrom: string, dateTo: string): boolean {
+  if (!dateFrom && !dateTo) return true;
+  const startRaw = getTripStartDate(req);
+  const endRaw = getTripEndDate(req) || startRaw;
+  const startDay = startRaw ? startRaw.slice(0, 10) : null;
+  const endDay = endRaw ? endRaw.slice(0, 10) : startDay;
+  if (!startDay) return false;
+  if (dateFrom && (endDay ?? startDay) < dateFrom) return false;
+  if (dateTo && startDay > dateTo) return false;
+  return true;
+}
+
+export function isTripActive(req: TravelRequest, today: string): boolean {
+  if (req.is_cancelled || ['CANCELLED', 'REJECTED', 'EXPIRED'].includes(req.status)) {
+    return false;
+  }
+  // Once the trip ends or hotel checked out or cab completed, it moves to old trips
+  if (
+    req.request_type === 'HOTEL' &&
+    (req.hotel_verification_status === 'CHECKED_OUT' || req.hotel_verification_status === 'VERIFIED')
+  ) {
+    return false;
+  }
+  if (
+    req.request_type === 'LOCAL_CAB' &&
+    (req.cab_telemetry_status === 'COMPLETED' || req.cab_telemetry_status === 'VERIFIED')
+  ) {
+    return false;
+  }
+  const endDate = getTripEndDate(req);
+  if (!endDate) return true;
+  const dateOnly = endDate.slice(0, 10);
+  return dateOnly >= today;
 }
