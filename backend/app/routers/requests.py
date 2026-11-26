@@ -32,7 +32,6 @@ from app.core.enums import (
     CabExtensionStatus,
     CancellationStatus,
     HotelOccupancy,
-    ManagerRecommendation,
     PRIORITY_RANK,
     RequestPriority,
     RequestStatus,
@@ -1287,26 +1286,6 @@ def decide_traveller(
     _decidable(row)
     traveller = _traveller_or_404(row, traveller_id)
 
-    if payload.to_status is TravellerStatus.APPROVED:
-        active_mgr = traveller.user.active_manager if traveller.user else None
-        if active_mgr is not None:
-            if traveller.manager_recommendation is None:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        f"Manager approval (L1) is required before Admin can approve "
-                        f"{traveller.user.full_name}. This request is awaiting manager review."
-                    ),
-                )
-            if traveller.manager_recommendation is ManagerRecommendation.NOT_RECOMMENDED:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        f"{traveller.user.full_name} was not recommended by their manager "
-                        f"({active_mgr.full_name}) and cannot be approved by Admin."
-                    ),
-                )
-
     if getattr(payload, "hotel_occupancy", None) is not None and row.request_type == RequestType.HOTEL:
         row.hotel_occupancy = payload.hotel_occupancy
     if getattr(payload, "cab_type", None) is not None and row.request_type == RequestType.LOCAL_CAB:
@@ -1447,7 +1426,7 @@ def book_travellers(
 def recommend(
     request_id: int,
     payload: RecommendationPayload,
-    manager: ManagerUser,
+    manager: AdminOrManager,
     http_request: Request,
     db: DbSession,
     background: BackgroundTasks,

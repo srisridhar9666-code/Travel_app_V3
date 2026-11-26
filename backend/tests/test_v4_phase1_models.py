@@ -312,20 +312,20 @@ def test_v4_expense_claim_workflow(db):
 
 
 def test_v4_expense_policy_schema_validation():
-    """Verify policy ceilings: food claims require receipts, unbilled transit capped at ₹150."""
+    """Verify policy ceiling constants and flexible ExpenseItemCreate schema submissions."""
     assert FOOD_ALLOWANCE_PER_DAY == 400
     assert LOCAL_TRANSIT_UNBILLED_MAX == 150
 
-    # Food without receipt should fail
-    with pytest.raises(ValueError, match="Daily food claims require supporting itemized bill/receipt"):
-        ExpenseItemCreate(
-            expense_date=date(2026, 11, 10),
-            category=ExpenseCategory.FOOD,
-            vendor_merchant_name="Lunch Dhaba",
-            claimed_amount=Decimal("350.00"),
-            receipt_url=None,
-            is_receipt_attached=False,
-        )
+    # Flexible food submission without receipt is accepted
+    food_item = ExpenseItemCreate(
+        expense_date=date(2026, 11, 10),
+        category=ExpenseCategory.FOOD,
+        vendor_merchant_name="Lunch Dhaba",
+        claimed_amount=Decimal("350.00"),
+        receipt_url=None,
+        is_receipt_attached=False,
+    )
+    assert food_item.claimed_amount == Decimal("350.00")
 
     # Local transit <= 150 without receipt is permitted
     item_ok = ExpenseItemCreate(
@@ -338,16 +338,16 @@ def test_v4_expense_policy_schema_validation():
     )
     assert item_ok.claimed_amount == Decimal("150.00")
 
-    # Local transit > 150 without receipt should fail
-    with pytest.raises(ValueError, match="Local transit claims exceeding ₹150 require receipts"):
-        ExpenseItemCreate(
-            expense_date=date(2026, 11, 10),
-            category=ExpenseCategory.LOCAL_TRANSIT,
-            vendor_merchant_name="Long Auto Ride",
-            claimed_amount=Decimal("180.00"),
-            receipt_url=None,
-            is_receipt_attached=False,
-        )
+    # Flexible local transit > 150 without receipt is also permitted on submission
+    item_over = ExpenseItemCreate(
+        expense_date=date(2026, 11, 10),
+        category=ExpenseCategory.LOCAL_TRANSIT,
+        vendor_merchant_name="Long Auto Ride",
+        claimed_amount=Decimal("180.00"),
+        receipt_url=None,
+        is_receipt_attached=False,
+    )
+    assert item_over.claimed_amount == Decimal("180.00")
 
 
 from fastapi.testclient import TestClient

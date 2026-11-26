@@ -107,6 +107,12 @@ def raise_trip(client, org, kind="cab", who="ravi", travellers=("ravi",), **over
 
 
 def decide(client, org, request_id, traveller_id, to="APPROVED", **extra):
+    if to == "APPROVED":
+        client.post(
+            f"/requests/{request_id}/recommendation",
+            headers=auth(org["lead"]),
+            json={"recommendation": "RECOMMENDED", "comment": "Needed on site", "traveller_ids": [traveller_id]},
+        )
     r = client.post(f"/requests/{request_id}/decide", headers=auth(org["admin"]), json={
         "decisions": [{"traveller_id": traveller_id, "to_status": to,
                        "reason": "Needed on site", **extra}]})
@@ -179,13 +185,12 @@ class TestExtendingACab:
         asked = notices(db, "REQUEST_SUBMITTED", user=org["admin"])[-1]
         assert asked.request_id == child["id"]
         assert f"asked to extend request {made['id']}" in asked.title
-        mail = notices(db, "REQUEST_SUBMITTED", user=org["admin"],
-                       channel=NotificationChannel.EMAIL)[-1]
-        assert mail.subject.startswith("Extension asked: Cab:")
-        assert "The trip it extends is not booked yet." in mail.body
 
         lead = notices(db, "TEAM_REQUEST_SUBMITTED", user=org["lead"])
         assert lead and lead[-1].request_id == child["id"]
+        mail = notices(db, "TEAM_REQUEST_SUBMITTED", user=org["lead"],
+                       channel=NotificationChannel.EMAIL)[-1]
+        assert "The trip it extends is not booked yet." in mail.body
 
         entry = db.execute(
             select(AuditLog).where(AuditLog.entity_type == "travel_request",

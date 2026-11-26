@@ -137,6 +137,13 @@ def raise_cab(client, org, who="ravi", travellers=("ravi",), **overrides):
 
 
 def decide(client, org, request_id, traveller_id, to="APPROVED", reason="Audit run", **extra):
+    if to == "APPROVED":
+        for mgr_key in ("lead", "other_lead"):
+            client.post(
+                f"/requests/{request_id}/recommendation",
+                headers=auth(org[mgr_key]),
+                json={"recommendation": "RECOMMENDED", "comment": reason, "traveller_ids": [traveller_id]},
+            )
     r = client.post(
         f"/requests/{request_id}/decide",
         headers=auth(org["admin"]),

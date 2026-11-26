@@ -334,6 +334,8 @@ def test_an_extension_is_booked_and_says_what_it_carries_on(client, db, org, out
     child = r.json()
     assert child["previous_booking"].startswith("Dzire (4 seats) TS 09 EA 1234")
     traveller = child["travellers"][0]["id"]
+    client.post(f"/requests/{child['id']}/recommendation", headers=auth(org["anil"]), json={
+        "recommendation": "RECOMMENDED", "comment": "Fine"})
     client.post(f"/requests/{child['id']}/decide", headers=auth(org["admin"]), json={
         "decisions": [{"traveller_id": traveller, "to_status": "APPROVED", "reason": "Fine"}]})
     outbox.clear()

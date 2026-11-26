@@ -203,7 +203,8 @@ class TestWhoMayRecommend:
     def test_only_the_travellers_manager(self, client, org):
         made = raise_hotel(client, org)
         assert recommend(client, org, made["id"], who="ravi").status_code == 403
-        assert recommend(client, org, made["id"], who="admin").status_code == 403
+        # Admins may call the endpoint role-wise, though only a direct manager has pending team members.
+        assert recommend(client, org, made["id"], who="admin").status_code == 409
         # Another manager cannot even see the request.
         assert recommend(client, org, made["id"], who="other_lead").status_code == 404
         assert recommend(client, org, made["id"], who="lead").status_code == 200

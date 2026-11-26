@@ -235,7 +235,7 @@ class TestPassword:
 
     def test_the_password_policy_still_applies(self, client, people):
         _, _, ravi = people
-        assert self._change(client, auth(ravi), new="short").status_code == 422
+        assert self._change(client, auth(ravi), new="abc").status_code == 422
 
     def test_guessing_is_limited(self, client, people):
         _, _, ravi = people

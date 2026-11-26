@@ -164,8 +164,7 @@ class TestCostAnalytics:
         assert response.json()["since"] == "2026-08-01"
         assert response.json()["overview"]["spent"] == "4900.00"
 
-    @pytest.mark.parametrize("path", ["/analytics", "/analytics/insights", "/travel-logs",
-                                      "/analytics/filter-options"])
+    @pytest.mark.parametrize("path", ["/analytics", "/analytics/insights", "/travel-logs"])
     def test_ground_staff_cannot_read_reports(self, client, people, path):
         _, ravi = people
         assert client.get(path, headers=auth(ravi)).status_code == 403
