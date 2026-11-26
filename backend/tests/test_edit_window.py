@@ -7,7 +7,7 @@ is mutated, that every amendment leaves exactly one append-only revision row wit
 a usable diff, and that a room share confirmed against one set of dates does not
 survive being moved to another.
 """
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
@@ -310,8 +310,9 @@ def test_editing_an_unrelated_field_leaves_the_share_alone(db, world):
 
 def test_status_follows_the_traveller_rows(db, world):
     project, ravi, meera = world
+    future_day = date.today() + timedelta(days=5)
     row = make_request(
-        db, project, [ravi, meera], check_in=date(2026, 11, 1), check_out=date(2026, 11, 4)
+        db, project, [ravi, meera], check_in=future_day, check_out=future_day + timedelta(days=3)
     )
 
     def status():

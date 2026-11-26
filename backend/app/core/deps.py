@@ -108,7 +108,7 @@ def require_roles(*allowed: Role):
 
 require_admin = require_roles(*ADMIN_ROLES)
 require_system_admin = require_roles(*ACCOUNT_ROLES)
-require_super_admin = require_roles(Role.SUPER_ADMIN, Role.SYSTEM_ADMIN)
+require_super_admin = require_roles(Role.SUPER_ADMIN)
 require_manager = require_roles(Role.MANAGER)
 require_finance = require_roles(*FINANCE_ROLES)
 require_vendor = require_roles(*VENDOR_ROLES)
@@ -119,7 +119,7 @@ require_finance_or_admin = require_roles(*FINANCE_ROLES, *ADMIN_ROLES)
 #: Who prepares vendor invoices and keeps the vendor list: admins and system
 #: admins. Not the super admin, on purpose - they approve invoices, and the
 #: person who approves a bill must not be the one who wrote it.
-require_invoice_editor = require_roles(*ADMIN_ROLES, Role.FINANCE, Role.VENDOR)
+require_invoice_editor = require_roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.FINANCE)
 #: Desk operations for reviewing/dispatching/fulfilling requests (Admin, Manager, Vendor)
 require_ops_desk = require_roles(*ADMIN_ROLES, Role.MANAGER, Role.VENDOR)
 

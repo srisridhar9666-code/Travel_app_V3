@@ -948,7 +948,7 @@ def record_submission(
         request=request,
         actor=actor,
         tenant_id=tenant_id,
-        send_email=not bool(mgr_queued),
+        send_email=bool(request.extends_request_id) or not bool(mgr_queued),
     )
     return admin_queued + mgr_queued
 

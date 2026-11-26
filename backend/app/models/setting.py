@@ -8,17 +8,23 @@ regularization allowances.
 from sqlalchemy import Boolean, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.config import get_settings
 from app.database import Base
-from app.models.base import TenantMixin, TimestampMixin
+from app.models.base import TimestampMixin
 
 
-class TenantSetting(Base, TenantMixin, TimestampMixin):
+class TenantSetting(Base, TimestampMixin):
     __tablename__ = "tenant_settings"
     __table_args__ = (
         UniqueConstraint("tenant_id", name="uq_tenant_settings_tenant_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(50),
+        default=lambda: get_settings().default_tenant,
+        nullable=False,
+    )
 
     #: Whether unclosed trips / missing checkout photos prevent booking next trip
     require_telemetry_checkout: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

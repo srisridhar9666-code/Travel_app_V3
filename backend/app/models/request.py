@@ -214,7 +214,7 @@ class TravelRequest(Base, TenantMixin, TimestampMixin):
     )
     #: Selected hotel proposal chosen by employee from vendor options (SOW Section 7)
     selected_hotel_proposal_id: Mapped[int | None] = mapped_column(
-        ForeignKey("hotel_proposals.id", ondelete="SET NULL", name="fk_requests_selected_proposal"),
+        ForeignKey("hotel_proposals.id", ondelete="SET NULL", name="fk_requests_selected_proposal", use_alter=True),
         nullable=True,
         index=True,
     )

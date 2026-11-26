@@ -30,7 +30,7 @@ from app.config import get_settings
 settings = get_settings()
 
 ALGORITHM = "HS256"
-MIN_PASSWORD_LENGTH = 4
+MIN_PASSWORD_LENGTH = 10
 MAX_PASSWORD_LENGTH = 256  # guards against megabyte-payload hashing DoS
 
 #: Not a breach corpus - just the handful that show up in practice on internal
@@ -90,7 +90,23 @@ def validate_password(password: str, *, email: str | None = None, name: str | No
         raise PasswordPolicyError(
             f"Password must be at most {MAX_PASSWORD_LENGTH} characters."
         )
-    # Simple password policy as requested: users can use their name, email, or simple words.
+
+    lowered = password.lower()
+    if lowered in _COMMON_PASSWORDS:
+        raise PasswordPolicyError("That password is too common. Choose something less guessable.")
+
+    if len(set(password)) < 5:
+        raise PasswordPolicyError("Password is too repetitive. Use a greater variety of characters.")
+
+    # Their own name or email local-part is the first thing anyone tries.
+    if email:
+        local = email.split("@", 1)[0].lower()
+        if len(local) >= 4 and local in lowered:
+            raise PasswordPolicyError("Password must not contain your email address.")
+    if name:
+        for part in name.lower().split():
+            if len(part) >= 4 and part in lowered:
+                raise PasswordPolicyError("Password must not contain your name.")
 
 
 # ---------------------------------------------------------------------------

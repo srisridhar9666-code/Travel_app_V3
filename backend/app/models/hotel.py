@@ -27,7 +27,7 @@ class SavedHotel(Base, TenantMixin, TimestampMixin):
 
     #: Vendor who manages/offered this hotel (or null if general organization listing)
     vendor_id: Mapped[int | None] = mapped_column(
-        ForeignKey("vendors.id", ondelete="SET NULL"), nullable=True, index=True
+        ForeignKey("vendors.id", ondelete="SET NULL"), nullable=True
     )
 
     hotel_name: Mapped[str] = mapped_column(String(160), nullable=False)

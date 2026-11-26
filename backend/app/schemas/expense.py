@@ -2,7 +2,13 @@ from datetime import date, datetime
 from decimal import Decimal
 from pydantic import BaseModel, Field, model_validator
 
-from app.core.enums import ExpenseCategory, ExpenseStatus, PaymentMode
+from app.core.enums import (
+    FOOD_ALLOWANCE_PER_DAY,
+    LOCAL_TRANSIT_UNBILLED_MAX,
+    ExpenseCategory,
+    ExpenseStatus,
+    PaymentMode,
+)
 
 
 class ExpenseItemCreate(BaseModel):
@@ -18,7 +24,11 @@ class ExpenseItemCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_policy_caps(self) -> "ExpenseItemCreate":
-        # Keep flexible for user submissions
+        has_receipt = bool(self.is_receipt_attached or (self.receipt_url and self.receipt_url.strip()))
+        if self.category == ExpenseCategory.FOOD and not has_receipt:
+            raise ValueError("Daily food claims require supporting itemized bill/receipt")
+        if self.category == ExpenseCategory.LOCAL_TRANSIT and self.claimed_amount > LOCAL_TRANSIT_UNBILLED_MAX and not has_receipt:
+            raise ValueError("Local transit claims exceeding ₹150 require receipts")
         return self
 
 

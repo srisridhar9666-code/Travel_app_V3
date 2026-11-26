@@ -82,7 +82,7 @@ def dashboard(actor: FinanceOrAdmin, db: DbSession, filters: ReportFilters) -> d
 
 
 @router.get("/analytics/filter-options")
-def filter_options(actor: CurrentUser, db: DbSession) -> dict:
+def filter_options(actor: FinanceOrAdmin, db: DbSession) -> dict:
     """Campaigns, departments, people, destination states and cities, for the
     report filters."""
     return insights.filter_options(db, actor.tenant_id)
